@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "novel-agent"
+version = "0.1.0"
+description = "基于 LangGraph 的网文 Agent，支持续写网文和创建/更新大纲"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "python-multipart>=0.0.5",
+    "openai>=1.0.0",
+    "langgraph>=0.2.0",
+    "jieba>=0.42.0",
+]
+
+[project.scripts]
+novel-agent = "novel_agent.api.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["novel_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+markers = [
+    "frontend: 前端相关测试（前后端一致性、前端逻辑验证）",
+    "backend: 后端相关测试（API 路由、服务层、Schema）",
+    "agent: Agent 相关测试（图、工具、生成、多 Agent）"]
+addopts = "-v"
