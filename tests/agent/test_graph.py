@@ -237,7 +237,7 @@ async def test_agent_node_subagent_success():
         result = await default_agent._agent_node(state)
     assert result.is_complete is True
     assert result.iteration == 1
-    assert any("creator" in m.get("content", "") for m in result.messages if m.get("role") == "assistant")
+    assert any("第2章" in m.get("content", "") for m in result.messages if m.get("role") == "assistant")
 
 
 # ======================================================================

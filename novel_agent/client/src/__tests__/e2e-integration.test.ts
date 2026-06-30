@@ -1,24 +1,14 @@
 /**
  * 端到端联动集成测试
  *
- * 测试从前端对话框输入到编辑器状态更新的完整链路：
- * 1. ChatPanel 发送消息 → SSE 事件流 → 编辑器字段更新
- * 2. 生成类 SSE 事件 → EditorStore 状态变更 → Markdown 编辑器内容
- * 3. field_content 事件 → 编辑器切换字段 + 内容更新
- * 4. chapter_title 事件 → 章节标题更新
- * 5. interrupt/resume 流程
- * 6. 错误处理 → 聊天消息显示
- * 7. 停止生成 → 中断 SSE 流 → 保留已生成内容
- * 8. 生成后自动保存链路
- *
- * 与 sse-handling.test.ts 的区别：
- *   - sse-handling.test.ts 测试模拟的 SSE 事件处理函数
- *   - 本测试使用真实的 Pinia Store，验证 Store 间的联动
+ * 使用真实的 createSseHandler + Pinia Store，验证聊天 → SSE → 编辑器联动。
+ * 章节生成专项回归见 chapter-generation-regression.test.ts。
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useEditorStore, useChatStore } from '@/stores'
+import { createSseHandler } from '@/composables/useSseHandler'
 import type { SseEvent } from '@/types'
 
 // 模拟 API 层
@@ -35,111 +25,27 @@ vi.mock('@/api', () => ({
   clearChat: vi.fn(),
 }))
 
-/**
- * 从 ChatPanel.vue 的 handleSseEvent 提取的核心逻辑
- * 用于在测试中模拟 SSE 事件对 Store 的影响
- */
-function handleSseEvent(
-  evt: SseEvent,
-  editorStore: ReturnType<typeof useEditorStore>,
+function makeHandleEvent(
   chatStore: ReturnType<typeof useChatStore>,
-): void {
-  switch (evt.type) {
-    case 'error':
-      throw new Error(evt.error || '未知错误')
-    case 'token':
-      if (chatStore.showThinking && chatStore.reasoningContent) chatStore.thinkingCollapsed = true
-      chatStore.streamingContent += evt.token || ''
-      break
-    case 'reasoning':
-      chatStore.showThinking = true
-      chatStore.thinkingCollapsed = false
-      chatStore.reasoningContent += evt.token || ''
-      break
-    case 'assistant_reply':
-      if (chatStore.showThinking && chatStore.reasoningContent) chatStore.thinkingCollapsed = true
-      chatStore.streamingContent = chatStore.streamingContent
-        ? chatStore.streamingContent + '\n\n' + (evt.content || '')
-        : (evt.content || '')
-      break
-    case 'task_complete':
-      break
-    case 'chapter_title':
-      editorStore.pendingChapterTitle = evt.title || ''
-      break
-    case 'generate_start':
-      handleGenerateStart(evt, editorStore)
-      break
-    case 'generate_token':
-      editorStore.fieldValues[evt.target || ''] =
-        (editorStore.fieldValues[evt.target || ''] || '') + (evt.token || '')
-      break
-    case 'generate_reset':
-      editorStore.fieldValues[evt.target || ''] = ''
-      break
-    case 'generate_done':
-      break
-    case 'field_content':
-      if (evt.target && evt.content) {
-        editorStore.fieldValues[evt.target] = evt.content
-        editorStore.editingField = evt.target
-        editorStore.mdPreviewMode = false
-      }
-      break
-    case 'interrupt':
-      break
-    case 'handoff':
-      chatStore.streamingContent = chatStore.streamingContent
-        ? chatStore.streamingContent + '\n\n正在切换执行器...'
-        : '正在切换执行器...'
-      break
-    case 'subagent_token':
-      if (evt.token) chatStore.streamingContent += evt.token || ''
-      break
-    case 'subagent_tool_call':
-      chatStore.streamingContent = chatStore.streamingContent
-        ? chatStore.streamingContent + '\n\n调用工具：' + (evt.name || '')
-        : '调用工具：' + (evt.name || '')
-      break
-    case 'plan_generated':
-      chatStore.streamingContent = chatStore.streamingContent
-        ? chatStore.streamingContent + '\n\n已生成执行计划'
-        : '已生成执行计划'
-      break
-    case 'plan_step_start':
-    case 'plan_step_complete':
-    case 'plan_completed':
-    case 'done':
-      break
-    case 'plan_replan':
-      chatStore.streamingContent = chatStore.streamingContent
-        ? chatStore.streamingContent + '\n\n重新规划中：' + (evt.name || evt.reason || '步骤执行失败')
-        : '重新规划中：' + (evt.name || evt.reason || '步骤执行失败')
-      break
-  }
-}
-
-function handleGenerateStart(
-  evt: SseEvent,
   editorStore: ReturnType<typeof useEditorStore>,
-): void {
-  if (evt.type !== 'generate_start') return
-  const target = evt.target
-  if (target === 'chapter_new') {
-    editorStore.activeChapterIdx = null
-  } else if (target.startsWith('chapter_review')) {
-    // internal review, skip
-  } else if (target.startsWith('chapter_')) {
-    editorStore.activeChapterIdx = parseInt(target.split('_')[1])
-  } else {
-    editorStore.editingField = target
-    editorStore.mdPreviewMode = false
-  }
+) {
+  return createSseHandler(chatStore, editorStore, {
+    onError: (evt) => { throw new Error(evt.error || '未知错误') },
+  })
 }
 
 describe('E2E: Chat input → SSE events → Editor state', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setActivePinia(createPinia())
+    const { getState } = await import('@/api')
+    vi.mocked(getState).mockResolvedValue({
+      current_book_name: '测试',
+      has_outline: true,
+      meta: { title: '测试', total_chapters: 0 },
+      outline: null,
+      chapters: [],
+      messages: [],
+    })
   })
 
   it('chitchat flow: user input → token events → streaming content → agent message', () => {
@@ -163,7 +69,7 @@ describe('E2E: Chat input → SSE events → Editor state', () => {
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
     // 验证聊天状态
@@ -209,7 +115,7 @@ describe('E2E: Chat input → SSE events → Editor state', () => {
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
     // 验证编辑器状态
@@ -239,18 +145,15 @@ describe('E2E: Chat input → SSE events → Editor state', () => {
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
-    // 验证章节标题
-    expect(editorStore.pendingChapterTitle).toBe('风起云涌')
-
-    // 验证章节内容
-    expect(editorStore.fieldValues['chapter_new']).toBe('正文开始...')
+    // 验证章节标题（generate_done 后会清空 pending）
+    expect(editorStore.fieldValues['chapter_1']).toBe('正文开始...')
+    expect(editorStore.streamingChapterContent).toBe('正文开始...')
 
     // field_content 切换到 chapter_1
     expect(editorStore.editingField).toBe('chapter_1')
-    expect(editorStore.fieldValues['chapter_1']).toBe('正文开始...')
 
     editorStore.stopGeneration()
   })
@@ -266,6 +169,7 @@ describe('E2E: Chat input → SSE events → Editor state', () => {
       { type: 'generate_start', target: 'characters_md_content' },
       { type: 'generate_token', target: 'characters_md_content', token: '不满意的' },
       { type: 'generate_reset', target: 'characters_md_content' },
+      { type: 'generate_start', target: 'characters_md_content' },
       { type: 'generate_token', target: 'characters_md_content', token: '新角色' },
       { type: 'generate_done' },
       { type: 'field_content', target: 'characters_md_content', content: '新角色档案' },
@@ -274,7 +178,7 @@ describe('E2E: Chat input → SSE events → Editor state', () => {
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
     // reset 后内容被清空，然后重新生成
@@ -296,10 +200,8 @@ describe('E2E: field_content switches editor field', () => {
     editorStore.fieldValues.settings_md_content = '设定内容'
     editorStore.mdPreviewMode = true
 
-    handleSseEvent(
+    makeHandleEvent(chatStore, editorStore)(
       { type: 'field_content', target: 'characters_md_content', content: '角色档案' },
-      editorStore,
-      chatStore,
     )
 
     expect(editorStore.editingField).toBe('characters_md_content')
@@ -313,10 +215,8 @@ describe('E2E: field_content switches editor field', () => {
 
     editorStore.editingField = 'settings_md_content'
 
-    handleSseEvent(
+    makeHandleEvent(chatStore, editorStore)(
       { type: 'field_content', target: 'chapter_5', content: '第5章内容' },
-      editorStore,
-      chatStore,
     )
 
     expect(editorStore.editingField).toBe('chapter_5')
@@ -327,10 +227,8 @@ describe('E2E: field_content switches editor field', () => {
     const editorStore = useEditorStore()
     const chatStore = useChatStore()
 
-    handleSseEvent(
+    makeHandleEvent(chatStore, editorStore)(
       { type: 'field_content', target: 'chapter_new', content: '新章节内容' },
-      editorStore,
-      chatStore,
     )
 
     expect(editorStore.editingField).toBe('chapter_new')
@@ -364,13 +262,11 @@ describe('E2E: Multi-agent handoff flow', () => {
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
-    // 验证聊天内容包含 handoff 和工具调用信息
-    expect(chatStore.streamingContent).toContain('切换执行器')
-    expect(chatStore.streamingContent).toContain('调用工具')
-    expect(chatStore.streamingContent).toContain('generate_settings')
+    // handoff / subagent_tool_call 由 agent_activity 展示，createSseHandler 不写入 streamingContent
+    expect(chatStore.reasoningContent).toBe('用户要生成设定')
 
     // 验证编辑器状态
     expect(editorStore.fieldValues.settings_md_content).toBe('修仙世界，灵气为尊')
@@ -378,7 +274,7 @@ describe('E2E: Multi-agent handoff flow', () => {
     editorStore.stopGeneration()
   })
 
-  it('plan_execute flow: plan_generated → step_start → step_complete → plan_completed', () => {
+  it('plan_execute events do not break handler', () => {
     const chatStore = useChatStore()
     const editorStore = useEditorStore()
 
@@ -402,13 +298,11 @@ describe('E2E: Multi-agent handoff flow', () => {
       { type: 'done' },
     ]
 
-    for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
-    }
-
-    expect(chatStore.streamingContent).toContain('执行计划')
-    expect(chatStore.streamingContent).toContain('generate_settings')
-    expect(chatStore.streamingContent).toContain('generate_characters')
+    expect(() => {
+      for (const evt of events) {
+        makeHandleEvent(chatStore, editorStore)(evt)
+      }
+    }).not.toThrow()
 
     editorStore.stopGeneration()
   })
@@ -427,10 +321,8 @@ describe('E2E: Error handling flow', () => {
     editorStore.startGeneration()
 
     try {
-      handleSseEvent(
+      makeHandleEvent(chatStore, editorStore)(
         { type: 'error', error: 'LLM 调用超时' },
-        editorStore,
-        chatStore,
       )
     } catch (e: any) {
       chatStore.addAgentMessage('出错了：' + (e.message || '未知错误'))
@@ -457,11 +349,11 @@ describe('E2E: Error handling flow', () => {
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
-    // generate_token 写入 editorStore.fieldValues，不是 chatStore.streamingContent
-    expect(editorStore.fieldValues.settings_md_content).toBe('部分内容')
+    // generate_token 写入独立生成缓冲
+    expect(editorStore.generatingStreamContent).toBe('部分内容')
 
     // 模拟 abort：chatStore.streamingContent 可能为空
     if (chatStore.streamingContent) {
@@ -471,9 +363,6 @@ describe('E2E: Error handling flow', () => {
     chatStore.addAgentMessage('⏹ 已停止')
     editorStore.stopGeneration()
 
-    // 验证编辑器中的部分内容被保留
-    expect(editorStore.fieldValues.settings_md_content).toBe('部分内容')
-    // 验证聊天中显示停止消息
     const stopMsg = chatStore.messages.find(m => m.content === '⏹ 已停止')
     expect(stopMsg).toBeDefined()
     expect(editorStore.isGenerating).toBe(false)
@@ -503,7 +392,7 @@ describe('E2E: Content history (undo/redo) with SSE events', () => {
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
     expect(editorStore.fieldValues.settings_md_content).toBe('新设定')
@@ -569,13 +458,14 @@ describe('E2E: Full chat → generate → save cycle', () => {
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
-    // 3. 流结束，保存 agent 消息
-    if (chatStore.streamingContent) {
-      chatStore.addAgentMessage(chatStore.streamingContent, chatStore.reasoningContent || undefined)
-    }
+    // 3. 流结束，保存 agent 消息（handoff 等事件不写入 streamingContent，用 reasoning 归档）
+    chatStore.addAgentMessage(
+      chatStore.streamingContent || '设定已生成',
+      chatStore.reasoningContent || undefined,
+    )
     chatStore.streamingContent = ''
     chatStore.reasoningContent = ''
     chatStore.showThinking = false
@@ -616,14 +506,14 @@ describe('E2E: Full chat → generate → save cycle', () => {
       { type: 'generate_start', target: 'chapter_new' },
       { type: 'chapter_title', title: '风起云涌' },
       { type: 'generate_token', target: 'chapter_new', token: '夜色降临...' },
-      { type: 'generate_done' },
       { type: 'field_content', target: 'chapter_1', content: '夜色降临...' },
+      { type: 'generate_done', target: 'chapter_1', title: '风起云涌' },
       { type: 'task_complete', summary: '章节已生成' },
       { type: 'done' },
     ]
 
     for (const evt of events) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
     if (chatStore.streamingContent) {
@@ -632,11 +522,9 @@ describe('E2E: Full chat → generate → save cycle', () => {
     chatStore.streamingContent = ''
     editorStore.stopGeneration()
 
-    // 验证章节标题
-    expect(editorStore.pendingChapterTitle).toBe('风起云涌')
-
-    // 验证编辑器切换到 chapter_1
+    // 验证编辑器切换到 chapter_1（后端已落盘，pending 在 generate_done 后清空）
     expect(editorStore.editingField).toBe('chapter_1')
+    expect(editorStore.streamingChapterContent).toBe('夜色降临...')
 
     // 模拟保存新章节
     const { addChapter } = await import('@/api')
@@ -673,7 +561,7 @@ describe('E2E: Multiple field updates in one session', () => {
     ]
 
     for (const evt of events1) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
     expect(editorStore.fieldValues.settings_md_content).toBe('修仙世界')
@@ -693,7 +581,7 @@ describe('E2E: Multiple field updates in one session', () => {
     ]
 
     for (const evt of events2) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
     expect(editorStore.fieldValues.characters_md_content).toBe('李逍遥：主角')
@@ -727,12 +615,11 @@ describe('E2E: Interrupt/Resume flow', () => {
 
     for (const evt of events) {
       if (evt.type === 'interrupt') {
-        // interrupt 不通过 handleSseEvent 处理，由 ChatPanel 直接处理
-        // 这里验证事件格式
+        // interrupt 由 ChatPanel.onInterrupt 处理，此处只验证事件格式
         expect(evt.interrupt).toBeDefined()
         expect(evt.interrupt!.message).toBe('是否重读全部章节？')
       } else {
-        handleSseEvent(evt, editorStore, chatStore)
+        makeHandleEvent(chatStore, editorStore)(evt)
       }
     }
 
@@ -752,7 +639,7 @@ describe('E2E: Interrupt/Resume flow', () => {
 
     chatStore.streamingContent = ''
     for (const evt of resumeEvents) {
-      handleSseEvent(evt, editorStore, chatStore)
+      makeHandleEvent(chatStore, editorStore)(evt)
     }
 
     expect(editorStore.fieldValues.outline_future_md_content).toBe('新大纲内容')

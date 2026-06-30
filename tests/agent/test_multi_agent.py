@@ -1,10 +1,9 @@
 """多 Agent 系统单元测试
 
-运行方式：
-  cd d:/Novel-LangGraph
-  python -m pytest tests/test_multi_agent.py -v
-  或
-  python tests/test_multi_agent.py
+测试原则：
+- 不硬编码工具/Agent 的精确数量（加了工具后不应改测试）
+- 用语义断言：存在/不存在某工具 > 精确数量
+- 用 superset 断言：已知集合是子集 > 精确相等
 """
 
 from novel_agent.agent.multi_agent import (
@@ -16,92 +15,121 @@ from novel_agent.core.models import NovelState
 from conftest import get_test_workspace_path
 
 
+# ── 语义断言 helper ──────────────────────────────────────────────
+
+
+def _assert_has_tools(agent_name: str, *must_have: str) -> None:
+    """断言 agent 拥有指定工具（不要求精确相等）"""
+    agent = get_agent(agent_name)
+    tools = set(agent.config.allowed_tools)
+    missing = set(must_have) - tools
+    assert not missing, f"{agent_name} 缺少工具: {missing}"
+    for t in must_have:
+        assert t in tools, f"{agent_name}.allowed_tools 应包含 {t}"
+
+
+def _assert_lacks_tools(agent_name: str, *must_not_have: str) -> None:
+    """断言 agent 不拥有指定工具"""
+    agent = get_agent(agent_name)
+    tools = set(agent.config.allowed_tools)
+    overlap = set(must_not_have) & tools
+    assert not overlap, f"{agent_name} 不应包含工具: {overlap}"
+
+
+# ── 测试 ─────────────────────────────────────────────────────────
+
+
 def test_registry():
-    agents = list_agents()
-    assert set(agents) == {"reader", "creator", "editor", "critic"}, f"Registry mismatch: {agents}"
-    assert get_agent("reader") is not None
-    assert get_agent("creator") is not None
-    assert get_agent("editor") is not None
-    assert get_agent("critic") is not None
+    agents = set(list_agents())
+    known = {"reader", "creator", "editor", "critic"}
+    assert known <= agents, f"缺少已知 agent: {known - agents}"
+    assert "updator" not in agents, "updator 不应注册为 Subagent"
+
+    for name in known:
+        assert get_agent(name) is not None, f"get_agent('{name}') 返回 None"
     assert get_agent("nonexistent") is None
-    print("OK: Registry has all 4 agents")
+    assert get_agent("updator") is None
 
 
 def test_subagent_configs():
-    reader = get_agent("reader")
-    creator = get_agent("creator")
-    editor = get_agent("editor")
-    critic = get_agent("critic")
+    _assert_has_tools(
+        "reader",
+        "read_novel_content",
+        "foreshadowing_status", "search_memory", "task_complete",
+    )
 
-    assert reader.config.name == "reader"
-    assert creator.config.name == "creator"
-    assert editor.config.name == "editor"
-    assert critic.config.name == "critic"
+    _assert_has_tools(
+            "creator",
+            "continue_writing", "regenerate_chapter", "generate_outline",
+            "generate_settings", "generate_characters", "generate_locations", "generate_relationships",
+            "generate_foreshadowing",
+            "memory_append", "memory_rewrite", "memory_consolidate",
+            "search_memory", "task_complete",
+        )
+    _assert_lacks_tools("creator", "read_novel_content")
 
-    assert set(reader.config.allowed_tools) == {"read_novel_content", "check_consistency", "analyze_pacing", "foreshadowing_status", "search_memory", "task_complete"}
-    assert set(creator.config.allowed_tools) == {
-        "continue_writing", "regenerate_chapter",
-        "generate_outline", "generate_outline_historical", "generate_outline_future",
-        "generate_settings",
-        "generate_characters", "generate_relationships", "generate_foreshadowing",
-        "init_novel",
-        "read_novel_content", "memory_append", "memory_rewrite", "memory_consolidate", "search_memory", "task_complete",
-    }
-    assert "update_field" in editor.config.allowed_tools
-    assert "update_outline" in editor.config.allowed_tools
-    assert "scan_foreshadowing" in editor.config.allowed_tools
-    assert "update_stale_fields" not in editor.config.allowed_tools
-    assert "read_novel_content" in editor.config.allowed_tools
-    assert "task_complete" in editor.config.allowed_tools
-    assert "generate_outline" not in editor.config.allowed_tools
+    _assert_has_tools(
+        "editor",
+        "update_field", "update_outline",
+        "memory_append", "memory_rewrite", "memory_consolidate",
+        "search_memory", "task_complete",
+    )
+    _assert_lacks_tools("editor", "read_novel_content", "generate_outline",
+                        "update_chapter_summaries", "scan_foreshadowing", "sync_settings")
 
-    assert critic.config.allowed_tools == ["read_novel_content", "search_memory", "critic_consistency", "critic_style", "critic_completeness", "critic_voice", "critic_pacing", "task_complete"]
-    assert critic.config.max_tool_rounds == 7
-    print("OK: All agent configs have correct tools")
+    _assert_has_tools(
+        "critic",
+        "read_novel_content", "search_memory",
+        "critic_consistency", "critic_style", "critic_completeness",
+        "critic_voice", "critic_pacing", "task_complete",
+    )
+    assert get_agent("critic").config.max_tool_rounds == 7
+
+    # 名称自检
+    for name in ("reader", "creator", "editor", "critic"):
+        assert get_agent(name).config.name == name
 
 
 def test_tool_schema_resolution():
-    reader_schemas = get_agent("reader")._get_tool_schemas()
-    creator_schemas = get_agent("creator")._get_tool_schemas()
-    editor_schemas = get_agent("editor")._get_tool_schemas()
-    critic_schemas = get_agent("critic")._get_tool_schemas()
-
-    assert len(reader_schemas) == 6, f"Reader expected 6 schemas, got {len(reader_schemas)}"
-    assert len(creator_schemas) == 16, f"Creator expected 16 schemas, got {len(creator_schemas)}"
-    assert len(editor_schemas) == 11, f"Editor expected 11 schemas, got {len(editor_schemas)}"
-    assert len(critic_schemas) == 8, f"Critic expected 8 schemas, got {len(critic_schemas)}"
-
-    for agent_name, schemas in [("reader", reader_schemas), ("creator", creator_schemas), ("editor", editor_schemas), ("critic", critic_schemas)]:
+    """验证每个 agent 的工具 schema 结构正确。不硬编码精确数量。"""
+    for agent_name in ("reader", "creator", "editor", "critic"):
+        schemas = get_agent(agent_name)._get_tool_schemas()
+        assert len(schemas) > 0, f"{agent_name} 没有任何 tool schema"
         for s in schemas:
-            assert "function" in s, f"Missing 'function' key in {agent_name} schema"
-            assert "name" in s["function"], f"Missing 'name' in {agent_name} schema"
-    print("OK: Tool schema counts and structure correct")
+            assert "function" in s, f"{agent_name} schema 缺少 'function' 键"
+            assert "name" in s["function"], f"{agent_name} schema 缺少 'name'"
+            assert s["function"]["name"], f"{agent_name} tool name 为空"
+
+    # Reader/Creator/Editor/Critic 至少各有 task_complete
+    for agent_name in ("reader", "creator", "editor", "critic"):
+        schemas = get_agent(agent_name)._get_tool_schemas()
+        names = {s["function"]["name"] for s in schemas}
+        assert "task_complete" in names, f"{agent_name} 缺少 task_complete"
 
 
 def test_lead_agent():
     lead = LeadAgent()
-
-    assert len(lead._handoff_schemas) == 4
     handoff_names = [s["function"]["name"] for s in lead._handoff_schemas]
-    assert "handoff_to_reader" in handoff_names
-    assert "handoff_to_creator" in handoff_names
-    assert "handoff_to_editor" in handoff_names
-    assert "handoff_to_critic" in handoff_names
+
+    # 每个已知 agent 都有对应的 handoff
+    known_agents = {"reader", "creator", "editor", "critic"}
+    for name in known_agents:
+        expected = f"handoff_to_{name}"
+        assert expected in handoff_names, f"缺少 {expected}"
+
+    # handoff 数量不少于已知 agent 数
+    assert len(handoff_names) >= len(known_agents)
 
     from novel_agent.agent.multi_agent.handoff import handoff_to_agent_name
-    assert handoff_to_agent_name("handoff_to_reader") == "reader"
-    assert handoff_to_agent_name("handoff_to_creator") == "creator"
-    assert handoff_to_agent_name("handoff_to_editor") == "editor"
-    assert handoff_to_agent_name("handoff_to_critic") == "critic"
-    assert handoff_to_agent_name("unknown") is None
-    print("OK: LeadAgent handoff schemas and mapping work")
+    for name in known_agents:
+        assert handoff_to_agent_name(f"handoff_to_{name}") == name
+    assert handoff_to_agent_name("handoff_to_nonexistent") is None
 
 
 def test_agent_loop():
     agent = AgentLoop()
     assert agent._lead_agent is not None
     assert isinstance(agent._lead_agent, LeadAgent)
-    print("OK: AgentLoop always uses multi-agent mode")
 
 
 def test_chat_state():
@@ -112,7 +140,6 @@ def test_chat_state():
     assert state.iteration == 0
     assert state.reflexion == ""
     assert state.tool_results == []
-    print("OK: ChatState initial values correct")
 
 
 def test_subagent_result():
@@ -136,7 +163,6 @@ def test_subagent_result():
     )
     assert fail_result.success is False
     assert fail_result.error == "LLM timeout"
-    print("OK: SubagentResult creation works")
 
 
 def test_subagent_build_messages():
@@ -159,7 +185,6 @@ def test_subagent_build_messages():
     user_msgs = [m for m in messages if m["role"] == "user"]
     assert len(user_msgs) == 1
     assert "主角" in user_msgs[0]["content"]
-    print("OK: Subagent message building works")
 
 
 def test_lead_build_messages():
@@ -176,14 +201,13 @@ def test_lead_build_messages():
 
     assert messages[0]["role"] == "system"
     assert "Agent 共识" in messages[0]["content"]
-    assert "负责人" in messages[1]["content"] or any("负责人" in m.get("content", "") for m in messages)
+    assert any("负责人" in m.get("content", "") for m in messages)
 
     has_novel_state = any("小说状态" in m.get("content", "") for m in messages)
     assert has_novel_state
 
     has_reflexion = any("上一轮评估器判定未完成" in m.get("content", "") for m in messages)
     assert has_reflexion, "Missing reflexion context"
-    print("OK: LeadAgent message building works")
 
 
 if __name__ == "__main__":

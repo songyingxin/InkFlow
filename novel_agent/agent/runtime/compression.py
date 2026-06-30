@@ -13,8 +13,12 @@ MessageCompressor 封装了压缩所需的配置参数和压缩逻辑。
 在 AgentLoop 的 _agent_node 中调用。
 """
 
+import logging
+
 from .llm import chat as llm_chat, COMPRESSION_MODEL
 from ...config import tc
+
+logger = logging.getLogger(__name__)
 
 
 class MessageCompressor:
@@ -167,7 +171,7 @@ class MessageCompressor:
                     ConversationMemory.append_to_short_memory(novel_state, flush_result.strip() + "\n")
 
             except Exception:
-                pass
+                logger.warning("压缩前 short_memory 刷新失败", exc_info=True)
 
         summary = await llm_chat(
             [

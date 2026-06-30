@@ -151,6 +151,86 @@ class TestHandleContinueWriting:
         result = await handle_continue_writing(state, 0)
         assert "已生成" in result or "已保存" in result
 
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter._self_review_chapter", new_callable=AsyncMock, return_value=("正文内容", False))
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_title", new_callable=AsyncMock)
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_content_stream")
+    @patch("novel_agent.agent.tools.chapter.get_writer")
+    async def test_continue_writing_emits_title_before_generate_start(
+        self, mock_writer, mock_stream, mock_title, mock_mm, mock_review,
+    ):
+        events = []
+        mock_writer.return_value = lambda x: events.append(x)
+        mock_title.return_value = "正文卷 第2章 查账寻踪"
+
+        async def fake_stream(*args, **kwargs):
+            yield "正文内容"
+
+        mock_stream.return_value = fake_stream()
+        mock_mm.save_chapter = MagicMock()
+        mock_mm.save_meta = MagicMock()
+        mock_mm.save_outline_structure = MagicMock()
+        mock_mm.load_chapter = MagicMock(return_value="")
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True),
+        ])
+        state = _make_chat_state(ns, user_request="续写下一章")
+        state._pending_reread = {}
+
+        from novel_agent.agent.tools.chapter import handle_continue_writing
+        await handle_continue_writing(state, 0)
+
+        title_idx = next(i for i, e in enumerate(events) if e.get("type") == "chapter_title")
+        gen_start_idx = next(i for i, e in enumerate(events) if e.get("type") == "generate_start")
+        field_idx = next(i for i, e in enumerate(events) if e.get("type") == "field_content")
+        done_idx = next(i for i, e in enumerate(events) if e.get("type") == "generate_done")
+
+        assert title_idx < gen_start_idx
+        assert field_idx < done_idx
+        assert events[title_idx]["title"] == "正文卷 第2章 查账寻踪"
+        assert events[title_idx]["chapter_num"] == 2
+        assert events[field_idx]["target"] == "chapter_2"
+        assert events[done_idx]["target"] == "chapter_2"
+        assert events[done_idx]["title"] == "正文卷 第2章 查账寻踪"
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter._self_review_chapter", new_callable=AsyncMock, return_value=("正文内容", False))
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_title", new_callable=AsyncMock)
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_content_stream")
+    @patch("novel_agent.agent.tools.chapter.get_writer")
+    async def test_continue_writing_passes_outline_title_to_generator(
+        self, mock_writer, mock_stream, mock_title, mock_mm, mock_review,
+    ):
+        mock_writer.return_value = lambda x: None
+        mock_title.return_value = "正文卷 第2章 查账寻踪"
+
+        async def fake_stream(*args, **kwargs):
+            yield "正文内容"
+
+        mock_stream.return_value = fake_stream()
+        mock_mm.save_chapter = MagicMock()
+        mock_mm.save_meta = MagicMock()
+        mock_mm.save_outline_structure = MagicMock()
+        mock_mm.load_chapter = MagicMock(return_value="")
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True),
+            ChapterOutline(title="正文卷 第2章 旧大纲标题", idx=2, is_written=False),
+        ])
+        state = _make_chat_state(ns, user_request="续写下一章")
+        state._pending_reread = {}
+
+        from novel_agent.agent.tools.chapter import handle_continue_writing
+        await handle_continue_writing(state, 0)
+
+        mock_title.assert_called_once()
+        call_args = mock_title.call_args[0]
+        assert call_args[1] == 2
+        assert call_args[3] == "正文卷 第2章 旧大纲标题"
+
 
 class TestHandleRegenerateChapter:
     @pytest.mark.asyncio
@@ -822,23 +902,24 @@ class TestHandleGenerateField:
 
     @pytest.mark.asyncio
     @patch("novel_agent.agent.tools.generate.NovelMemory")
-    @patch("novel_agent.agent.tools.generate.iterative_generate_stream")
+    @patch("novel_agent.agent.tools.generate._build_future_stream")
     @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_historical_outline(self, mock_writer, mock_stream, mock_mm):
+    async def test_future_outline(self, mock_writer, mock_stream, mock_mm):
         mock_writer.return_value = lambda x: None
         mock_mm.save_field_content = MagicMock()
+        mock_mm.save_meta = MagicMock()
 
         async def fake_stream(*args, **kwargs):
-            yield "历史大纲"
+            yield "未来大纲"
 
         mock_stream.return_value = fake_stream()
 
         ns = _make_novel_state()
-        state = _make_chat_state(ns, user_request="生成历史大纲")
+        state = _make_chat_state(ns, user_request="生成未来大纲")
 
         from novel_agent.agent.tools.generate import handle_generate_field
-        result = await handle_generate_field(state, "outline_historical_md_content", "历史大纲")
-        assert "历史大纲" in result or "保存" in result
+        result = await handle_generate_field(state, "outline_future_md_content", "未来大纲")
+        assert "未来大纲" in result or "保存" in result
 
     @pytest.mark.asyncio
     @patch("novel_agent.agent.tools.generate.NovelMemory")
@@ -879,62 +960,19 @@ class TestHandleGenerateOutline:
             ChapterOutline(title="第一章", idx=1, is_written=True),
         ])
         ns.memory_files.chapters_dir = Path("/tmp/test_chapters")
+        ns.outline_future_md_content = "- 第2章 下章：已有规划"
         state = _make_chat_state(ns)
 
         with patch.object(Path, "exists", return_value=True), \
              patch.object(Path, "glob", return_value=[Path("001.md")]):
             from novel_agent.agent.tools.generate import handle_generate_outline
             result = await handle_generate_outline(state)
-            assert "增量更新" in result
+            assert "update_outline" in result
 
     @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.handle_generate_field", new_callable=AsyncMock)
+    @patch("novel_agent.agent.tools.generate._full_generate_outline", new_callable=AsyncMock)
     @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_choice_both(self, mock_writer, mock_handler):
-        mock_writer.return_value = lambda x: None
-        mock_handler.side_effect = ["历史大纲已生成", "未来大纲已生成"]
-
-        ns = _make_novel_state(chapters=[
-            ChapterOutline(title="第一章", idx=1, is_written=True),
-        ])
-        ns.memory_files.chapters_dir = Path("/tmp/test_chapters")
-        ns.meta.outline_historical_read_ch = 1
-        state = _make_chat_state(ns)
-
-        with patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "glob", return_value=[Path("001.md")]), \
-             patch("novel_agent.agent.tools.generate.ask_user_confirmation", return_value="历史大纲 + 未来大纲"):
-            from novel_agent.agent.tools.generate import handle_generate_outline
-            result = await handle_generate_outline(state)
-            assert "重新生成" in result
-            assert mock_handler.call_count == 2
-
-    @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.handle_generate_field", new_callable=AsyncMock)
-    @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_choice_historical_only(self, mock_writer, mock_handler):
-        mock_writer.return_value = lambda x: None
-        mock_handler.return_value = "历史大纲已生成"
-
-        ns = _make_novel_state(chapters=[
-            ChapterOutline(title="第一章", idx=1, is_written=True),
-        ])
-        ns.memory_files.chapters_dir = Path("/tmp/test_chapters")
-        ns.meta.outline_historical_read_ch = 1
-        state = _make_chat_state(ns)
-
-        with patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "glob", return_value=[Path("001.md")]), \
-             patch("novel_agent.agent.tools.generate.ask_user_confirmation", return_value="仅历史大纲"):
-            from novel_agent.agent.tools.generate import handle_generate_outline
-            result = await handle_generate_outline(state)
-            assert "历史大纲已生成" in result
-            assert mock_handler.call_count == 1
-
-    @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.handle_generate_field", new_callable=AsyncMock)
-    @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_choice_future_only(self, mock_writer, mock_handler):
+    async def test_choice_regenerate_future(self, mock_writer, mock_handler):
         mock_writer.return_value = lambda x: None
         mock_handler.return_value = "未来大纲已生成"
 
@@ -942,19 +980,40 @@ class TestHandleGenerateOutline:
             ChapterOutline(title="第一章", idx=1, is_written=True),
         ])
         ns.memory_files.chapters_dir = Path("/tmp/test_chapters")
-        ns.meta.outline_historical_read_ch = 1
+        ns.meta.outline_future_read_ch = 1
+        ns.outline_future_md_content = "- 第2章 下章：已有规划"
         state = _make_chat_state(ns)
 
         with patch.object(Path, "exists", return_value=True), \
              patch.object(Path, "glob", return_value=[Path("001.md")]), \
-             patch("novel_agent.agent.tools.generate.ask_user_confirmation", return_value="仅未来大纲"):
+             patch("novel_agent.agent.tools.generate.ask_user_confirmation", return_value="重新生成未来细纲"):
             from novel_agent.agent.tools.generate import handle_generate_outline
             result = await handle_generate_outline(state)
             assert "未来大纲已生成" in result
             assert mock_handler.call_count == 1
 
     @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.handle_generate_field", new_callable=AsyncMock)
+    @patch("novel_agent.agent.tools.generate.get_writer")
+    async def test_cancel_regenerate(self, mock_writer):
+        mock_writer.return_value = lambda x: None
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True),
+        ])
+        ns.memory_files.chapters_dir = Path("/tmp/test_chapters")
+        ns.meta.outline_future_read_ch = 1
+        ns.outline_future_md_content = "- 第2章 下章：已有规划"
+        state = _make_chat_state(ns)
+
+        with patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "glob", return_value=[Path("001.md")]), \
+             patch("novel_agent.agent.tools.generate.ask_user_confirmation", return_value="取消"):
+            from novel_agent.agent.tools.generate import handle_generate_outline
+            result = await handle_generate_outline(state)
+            assert "取消" in result
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.generate._full_generate_outline", new_callable=AsyncMock)
     @patch("novel_agent.agent.tools.generate.get_writer")
     async def test_no_written_chapters(self, mock_writer, mock_handler):
         mock_writer.return_value = lambda x: None
@@ -970,44 +1029,23 @@ class TestHandleGenerateOutline:
 
 
 # ======================================================================
-# generate.py: handle_generate_outline_historical
+# generate.py: _full_generate_outline
 # ======================================================================
 
-class TestHandleGenerateOutlineHistorical:
+class TestFullGenerateOutline:
     @pytest.mark.asyncio
     @patch("novel_agent.agent.tools.generate.handle_generate_field", new_callable=AsyncMock)
-    async def test_calls_generate_field(self, mock_handler):
-        mock_handler.return_value = "历史大纲已生成"
+    async def test_calls_generate_field_with_reread_all(self, mock_handler):
+        mock_handler.return_value = "细纲已生成"
 
         ns = _make_novel_state()
         state = _make_chat_state(ns)
 
-        from novel_agent.agent.tools.generate import handle_generate_outline_historical
-        result = await handle_generate_outline_historical(state)
-        assert "历史大纲已生成" in result
+        from novel_agent.agent.tools.generate import _full_generate_outline
+        result = await _full_generate_outline(state)
+        assert "细纲已生成" in result
         mock_handler.assert_called_once_with(
-            state, "outline_historical_md_content", "历史大纲", reread_all=True,
-        )
-
-
-# ======================================================================
-# generate.py: handle_generate_outline_future
-# ======================================================================
-
-class TestHandleGenerateOutlineFuture:
-    @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.handle_generate_field", new_callable=AsyncMock)
-    async def test_calls_generate_field(self, mock_handler):
-        mock_handler.return_value = "未来大纲已生成"
-
-        ns = _make_novel_state()
-        state = _make_chat_state(ns)
-
-        from novel_agent.agent.tools.generate import handle_generate_outline_future
-        result = await handle_generate_outline_future(state)
-        assert "未来大纲已生成" in result
-        mock_handler.assert_called_once_with(
-            state, "outline_future_md_content", "未来大纲", reread_all=True,
+            state, "outline_future_md_content", "未来章节细纲", reread_all=True,
         )
 
 
@@ -1015,13 +1053,31 @@ class TestHandleGenerateOutlineFuture:
 # generate.py: handle_update_outline
 # ======================================================================
 
-class TestHandleUpdateOutline:
+class TestHandleUpdateOutlineFuture:
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.generate.get_writer")
+    async def test_blocks_when_missing_summaries(self, mock_writer):
+        mock_writer.return_value = lambda x: None
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True, content_summary=""),
+        ])
+        ns.memory_files.chapters_dir = Path("/tmp/test_chapters")
+        state = _make_chat_state(ns)
+
+        from novel_agent.agent.tools.generate import handle_update_outline
+        result = await handle_update_outline(state)
+        assert "缺少摘要" in result
+
     @pytest.mark.asyncio
     @patch("novel_agent.agent.tools.generate.NovelMemory.save_field_content")
-    @patch("novel_agent.agent.tools.generate.update_field_stream")
+    @patch("novel_agent.agent.tools.generate.NovelMemory.save_meta")
+    @patch("novel_agent.agent.tools.generate.NovelMemory.get_chapters_missing_summary", return_value=[])
+    @patch("novel_agent.agent.tools.generate.NovelMemory.assemble_historical_outline", return_value="摘要")
+    @patch("novel_agent.agent.tools.generate._build_future_stream")
     @patch("novel_agent.agent.tools.generate.load_chapter_text")
     @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_updates_both(self, mock_writer, mock_load, mock_update, mock_save):
+    async def test_incremental_update(self, mock_writer, mock_load, mock_future_stream, mock_summaries, mock_missing, mock_save_meta, mock_save):
         mock_writer.return_value = lambda x: None
         mock_load.return_value = "第一章正文内容"
 
@@ -1039,7 +1095,7 @@ class TestHandleUpdateOutline:
         def fake_stream(*args, **kwargs):
             return _AsyncIter(["更", "新"])
 
-        mock_update.side_effect = fake_stream
+        mock_future_stream.side_effect = fake_stream
 
         ns = _make_novel_state(chapters=[
             ChapterOutline(title="第一章", idx=1, is_written=True),
@@ -1052,7 +1108,6 @@ class TestHandleUpdateOutline:
             from novel_agent.agent.tools.generate import handle_update_outline
             result = await handle_update_outline(state)
             assert "增量更新完成" in result
-            assert mock_update.call_count == 2
 
     @pytest.mark.asyncio
     @patch("novel_agent.agent.tools.generate.get_writer")
@@ -1060,131 +1115,447 @@ class TestHandleUpdateOutline:
         mock_writer.return_value = lambda x: None
 
         ns = _make_novel_state(chapters=[
-            ChapterOutline(title="第一章", idx=1, is_written=True),
+            ChapterOutline(title="第一章", idx=1, is_written=True, content_summary="第一章摘要"),
         ])
-        ns.meta.outline_historical_read_ch = 1
+        ns.meta.outline_future_read_ch = 1
+        ns.outline_future_md_content = "- 第2章 下章：情节规划"
         state = _make_chat_state(ns)
 
         from novel_agent.agent.tools.generate import handle_update_outline
         result = await handle_update_outline(state)
-        assert "没有未读章节" in result
+        assert "未来细纲没有未同步章节" in result
 
-
-# ======================================================================
-# generate.py: handle_update_outline_historical
-# ======================================================================
-
-class TestHandleUpdateOutlineHistorical:
     @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.NovelMemory.save_field_content")
-    @patch("novel_agent.agent.tools.generate.update_field_stream")
-    @patch("novel_agent.agent.tools.generate.load_chapter_text")
+    @patch("novel_agent.agent.tools.generate._full_generate_outline", new_callable=AsyncMock)
     @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_incremental_update(self, mock_writer, mock_load, mock_update, mock_save):
+    async def test_empty_outline_falls_back_to_generate(self, mock_writer, mock_gen):
         mock_writer.return_value = lambda x: None
-        mock_load.return_value = "第一章正文内容"
+        mock_gen.return_value = "细纲已生成"
 
-        class _AsyncIter:
-            def __init__(self, items):
-                self._items = iter(items)
-            def __aiter__(self):
-                return self
-            async def __anext__(self):
-                try:
-                    return next(self._items)
-                except StopIteration:
-                    raise StopAsyncIteration
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True, content_summary="第一章摘要"),
+        ])
+        ns.meta.outline_future_read_ch = 1
+        ns.outline_future_md_content = "## 未来章节大纲"
+        state = _make_chat_state(ns)
 
-        def fake_stream(*args, **kwargs):
-            return _AsyncIter(["更", "新"])
+        from novel_agent.agent.tools.generate import handle_update_outline
+        result = await handle_update_outline(state)
+        assert mock_gen.call_count == 1
+        assert "细纲已生成" in result
 
-        mock_update.side_effect = fake_stream
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.generate._full_generate_outline", new_callable=AsyncMock)
+    @patch("novel_agent.agent.tools.generate.get_writer")
+    async def test_generate_outline_explicit_future_keyword(self, mock_writer, mock_gen):
+        mock_writer.return_value = lambda x: None
+        mock_gen.return_value = "细纲已生成"
 
         ns = _make_novel_state(chapters=[
             ChapterOutline(title="第一章", idx=1, is_written=True),
         ])
         ns.memory_files.chapters_dir = Path("/tmp/test_chapters")
-        state = _make_chat_state(ns)
+        ns.meta.outline_future_read_ch = 1
+        ns.outline_future_md_content = "- 第2章 下章：已有规划"
+        state = _make_chat_state(ns, user_request="生成未来大纲")
 
         with patch.object(Path, "exists", return_value=True), \
              patch.object(Path, "glob", return_value=[Path("001.md")]):
-            from novel_agent.agent.tools.generate import handle_update_outline_historical
-            result = await handle_update_outline_historical(state)
-            assert "增量更新完成" in result
-
-    @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_no_unread_chapters(self, mock_writer):
-        mock_writer.return_value = lambda x: None
-
-        ns = _make_novel_state(chapters=[
-            ChapterOutline(title="第一章", idx=1, is_written=True),
-        ])
-        ns.meta.outline_historical_read_ch = 1
-        state = _make_chat_state(ns)
-
-        from novel_agent.agent.tools.generate import handle_update_outline_historical
-        result = await handle_update_outline_historical(state)
-        assert "没有未读章节" in result
-
-
-# ======================================================================
-# generate.py: handle_update_outline_future
-# ======================================================================
-
-class TestHandleUpdateOutlineFuture:
-    @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.NovelMemory.save_field_content")
-    @patch("novel_agent.agent.tools.generate.update_field_stream")
-    @patch("novel_agent.agent.tools.generate.load_chapter_text")
-    @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_incremental_update(self, mock_writer, mock_load, mock_update, mock_save):
-        mock_writer.return_value = lambda x: None
-        mock_load.return_value = "第一章正文内容"
-
-        class _AsyncIter:
-            def __init__(self, items):
-                self._items = iter(items)
-            def __aiter__(self):
-                return self
-            async def __anext__(self):
-                try:
-                    return next(self._items)
-                except StopIteration:
-                    raise StopAsyncIteration
-
-        def fake_stream(*args, **kwargs):
-            return _AsyncIter(["更", "新"])
-
-        mock_update.side_effect = fake_stream
-
-        ns = _make_novel_state(chapters=[
-            ChapterOutline(title="第一章", idx=1, is_written=True),
-        ])
-        ns.memory_files.chapters_dir = Path("/tmp/test_chapters")
-        state = _make_chat_state(ns)
-
-        with patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "glob", return_value=[Path("001.md")]):
-            from novel_agent.agent.tools.generate import handle_update_outline_future
-            result = await handle_update_outline_future(state)
-            assert "增量更新完成" in result
-
-    @pytest.mark.asyncio
-    @patch("novel_agent.agent.tools.generate.get_writer")
-    async def test_no_unread_chapters(self, mock_writer):
-        mock_writer.return_value = lambda x: None
-
-        ns = _make_novel_state(chapters=[
-            ChapterOutline(title="第一章", idx=1, is_written=True),
-        ])
-        ns.meta.outline_historical_read_ch = 1
-        state = _make_chat_state(ns)
-
-        from novel_agent.agent.tools.generate import handle_update_outline_future
-        result = await handle_update_outline_future(state)
-        assert "没有未读章节" in result
+            from novel_agent.agent.tools.generate import handle_generate_outline
+            result = await handle_generate_outline(state)
+            assert mock_gen.call_count == 1
+            assert "细纲已生成" in result
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ======================================================================
+# 写 · 功能测试（§2 正文+保存+元数据）
+# ======================================================================
+
+class TestContinueWritingRejectsWritten:
+    """§2.1: 该章已写过则拒绝，提示用「重写」"""
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter.get_writer")
+    async def test_continue_writing_rejects_already_written_chapter(self, mock_writer):
+        events = []
+        mock_writer.return_value = lambda x: events.append(x)
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True),
+            ChapterOutline(title="第二章", idx=2, is_written=True),
+        ])
+        state = _make_chat_state(ns, user_request="写第2章")
+
+        from novel_agent.agent.tools.chapter import handle_continue_writing
+        result = await handle_continue_writing(state, chapter_num=2)
+        assert not result.success
+        assert "已存在" in result.content or "重写" in result.content
+        token_msgs = [e for e in events if e.get("type") == "token"]
+        assert any("重写" in e.get("token", "") for e in token_msgs)
+
+
+class TestContinueWritingSummaryEmpty:
+    """§2.1: 写章和保存只动正文，content_summary 留空"""
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter._self_review_chapter", new_callable=AsyncMock, return_value=("正文内容", False))
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_title", new_callable=AsyncMock)
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_content_stream")
+    @patch("novel_agent.agent.tools.chapter.get_writer")
+    async def test_continue_writing_leaves_summary_empty(
+        self, mock_writer, mock_stream, mock_title, mock_mm, mock_review,
+    ):
+        mock_writer.return_value = lambda x: None
+        mock_title.return_value = "新章"
+
+        async def fake_stream(*args, **kwargs):
+            yield "正文内容"
+
+        mock_stream.return_value = fake_stream()
+        mock_mm.save_chapter = MagicMock()
+        mock_mm.save_meta = MagicMock()
+        mock_mm.save_outline_structure = MagicMock()
+        mock_mm.load_chapter = MagicMock(return_value="")
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True),
+        ])
+        state = _make_chat_state(ns, user_request="续写下一章")
+        state._pending_reread = {}
+
+        from novel_agent.agent.tools.chapter import handle_continue_writing
+        await handle_continue_writing(state, 0)
+
+        new_ch = ns.find_chapter_in_outline(2)
+        assert new_ch is not None
+        assert new_ch.is_written is True
+        assert new_ch.content_summary == ""
+        assert new_ch.word_count == len("正文内容")
+        assert new_ch.status == "draft"
+        assert new_ch.content_hash
+
+
+class TestContinueWritingFirstChapter:
+    """无章节时续写，自动创建第1章"""
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter._self_review_chapter", new_callable=AsyncMock, return_value=("第一章正文", False))
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_title", new_callable=AsyncMock)
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_content_stream")
+    @patch("novel_agent.agent.tools.chapter.get_writer")
+    async def test_first_chapter(self, mock_writer, mock_stream, mock_title, mock_mm, mock_review):
+        mock_writer.return_value = lambda x: None
+        mock_title.return_value = "第1章"
+
+        async def fake_stream(*args, **kwargs):
+            yield "第一章正文"
+
+        mock_stream.return_value = fake_stream()
+        mock_mm.save_chapter = MagicMock()
+        mock_mm.save_meta = MagicMock()
+        mock_mm.save_outline_structure = MagicMock()
+        mock_mm.load_chapter = MagicMock(return_value="")
+
+        ns = _make_novel_state()
+        state = _make_chat_state(ns, user_request="续写")
+        state._pending_reread = {}
+
+        from novel_agent.agent.tools.chapter import handle_continue_writing
+        result = await handle_continue_writing(state, 0)
+        assert "1" in result
+        assert "已生成" in result or "已保存" in result
+
+        ch = ns.find_chapter_in_outline(1)
+        assert ch is not None
+        assert ch.is_written is True
+
+
+class TestRegenerateChapterEdgeCases:
+    """§2.1: regenerate_chapter 边界"""
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter.get_writer")
+    async def test_regenerate_invalid_chapter_num(self, mock_writer):
+        events = []
+        mock_writer.return_value = lambda x: events.append(x)
+
+        ns = _make_novel_state()
+        state = _make_chat_state(ns, user_request="重写")
+
+        from novel_agent.agent.tools.chapter import handle_regenerate_chapter
+        result = await handle_regenerate_chapter(state, 0)
+        assert not result.success
+        assert "失败" in result.content or "请指定" in result.content
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter.get_writer")
+    async def test_regenerate_nonexistent_chapter(self, mock_writer):
+        events = []
+        mock_writer.return_value = lambda x: events.append(x)
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True),
+        ])
+        state = _make_chat_state(ns, user_request="重写第99章")
+
+        from novel_agent.agent.tools.chapter import handle_regenerate_chapter
+        result = await handle_regenerate_chapter(state, 99)
+        assert not result.success
+        assert "不在大纲" in result.content or "不存在" in result.content
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter._stream_chapter_content", new_callable=AsyncMock)
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    @patch("novel_agent.agent.tools.chapter.get_writer")
+    async def test_regenerate_partial_rewrite_detected(self, mock_writer, mock_mm, mock_stream):
+        mock_writer.return_value = lambda x: None
+        mock_mm.load_chapter = MagicMock(return_value="上半段内容\n下半段内容")
+        mock_mm.save_chapter = MagicMock()
+        mock_stream.return_value = ("<<<<<<< MARK\n新下半段", "")
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True),
+        ])
+        state = _make_chat_state(ns, user_request="局部重写第一章后半段")
+
+        from novel_agent.agent.tools.chapter import handle_regenerate_chapter
+        result = await handle_regenerate_chapter(state, 1, writing_instruction="只重写后半段")
+        assert "局部重写" in result
+
+
+class TestStreamChapterContentIncremental:
+    """§3: 流式中断恢复 — 每 200 字落盘"""
+
+    async def _token_gen(self, count: int):
+        for i in range(count):
+            yield chr(65 + (i % 26))
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_content_stream")
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    async def test_saves_incrementally_every_200_chars(self, mock_mm, mock_stream):
+        mock_mm.load_chapter.return_value = ""
+        mock_mm.save_chapter = MagicMock()
+
+        total = 450
+        async def fake_gen(*a, **kw):
+            for i in range(total):
+                yield chr(65 + (i % 26))
+        mock_stream.return_value = fake_gen()
+
+        from novel_agent.agent.tools.chapter import _stream_chapter_content
+        ns = _make_novel_state()
+        def w(x):
+            pass
+        content, _ = await _stream_chapter_content(w, ns, 1, "标题", "", "target")
+        assert len(content) == total
+        assert mock_mm.save_chapter.call_count >= 2
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.chapter.generate_chapter_content_stream")
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    async def test_short_stream_no_intermediate_save(self, mock_mm, mock_stream):
+        mock_mm.load_chapter.return_value = ""
+        mock_mm.save_chapter = MagicMock()
+
+        async def fake_gen(*a, **kw):
+            yield "短内容"
+        mock_stream.return_value = fake_gen()
+
+        from novel_agent.agent.tools.chapter import _stream_chapter_content
+        ns = _make_novel_state()
+        def w(x):
+            pass
+        content, _ = await _stream_chapter_content(w, ns, 1, "标题", "", "target")
+        assert len(content) == 3
+        assert mock_mm.save_chapter.call_count == 1
+
+
+class TestFinalizeChapterWrite:
+    """§2.1 + 章节元数据：word_count / content_hash / status / summary"""
+
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    def test_finalize_sets_all_metadata(self, mock_mm):
+        mock_mm.save_chapter = MagicMock()
+        mock_mm.save_meta = MagicMock()
+        mock_mm.save_outline_structure = MagicMock()
+
+        ns = _make_novel_state(chapters=[
+            ChapterOutline(title="第一章", idx=1, is_written=True),
+        ])
+        ch = ns.find_chapter_in_outline(1)
+        ch.content_summary = "旧摘要"
+        ch.content_hash = "oldhash"
+        ch.word_count = 0
+        ch.status = "draft"
+
+        import asyncio
+        from novel_agent.agent.tools.chapter import _finalize_chapter_write
+        result = asyncio.run(
+            _finalize_chapter_write(ns, 1, "第一章", "新正文内容ABC" * 100)
+        )
+
+        assert ch.content_summary == ""
+        assert ch.content_hash
+        assert ch.word_count == len("新正文内容ABC" * 100)
+        assert "已保存" in result
+        assert "摘要" in result
+
+    @patch("novel_agent.agent.tools.chapter.NovelMemory")
+    def test_finalize_creates_new_chapter_if_not_in_outline(self, mock_mm):
+        mock_mm.save_chapter = MagicMock()
+        mock_mm.save_meta = MagicMock()
+        mock_mm.save_outline_structure = MagicMock()
+
+        ns = _make_novel_state()
+
+        import asyncio
+        from novel_agent.agent.tools.chapter import _finalize_chapter_write
+        asyncio.run(_finalize_chapter_write(ns, 5, "第五章", "第五章正文"))
+
+        ch = ns.find_chapter_in_outline(5)
+        assert ch is not None
+        assert ch.title == "第五章"
+        assert ch.is_written is True
+        assert ch.status == "draft"
+        assert ch.content_hash
+        assert ch.word_count == len("第五章正文")
+
+
+class TestGenerateFieldIncrementalSave:
+    """§3: 字段生成流式中断恢复 — 分批保存"""
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.generate.NovelMemory")
+    @patch("novel_agent.agent.tools.generate.generate_field_stream")
+    @patch("novel_agent.agent.tools.generate.get_writer")
+    async def test_large_output_saves_mid_stream(self, mock_writer, mock_stream, mock_mm):
+        mock_writer.return_value = lambda x: None
+        mock_mm.save_field_content = MagicMock()
+        mock_mm.save_meta = MagicMock()
+
+        total = 500
+        async def fake_stream(*args, **kwargs):
+            for i in range(total):
+                yield chr(65 + (i % 26))
+        mock_stream.return_value = fake_stream()
+
+        ns = _make_novel_state()
+        state = _make_chat_state(ns, user_request="生成设定")
+
+        from novel_agent.agent.tools.generate import handle_generate_field
+        await handle_generate_field(state, "settings_md_content", "写作设定")
+        assert mock_mm.save_field_content.call_count >= 3
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.generate.NovelMemory")
+    @patch("novel_agent.agent.tools.generate.generate_field_stream")
+    @patch("novel_agent.agent.tools.generate.get_writer")
+    async def test_exception_during_generate_saves_partial(self, mock_writer, mock_stream, mock_mm):
+        mock_writer.return_value = lambda x: None
+        mock_mm.save_field_content = MagicMock()
+        mock_mm.save_meta = MagicMock()
+
+        async def fake_stream(*args, **kwargs):
+            for i in range(10):
+                yield "A"
+            raise RuntimeError("模拟中断")
+
+        mock_stream.return_value = fake_stream()
+
+        ns = _make_novel_state()
+        state = _make_chat_state(ns, user_request="生成设定")
+
+        from novel_agent.agent.tools.generate import handle_generate_field
+        result = await handle_generate_field(state, "settings_md_content", "写作设定")
+        assert "失败" in result
+        assert mock_mm.save_field_content.call_count >= 1
+
+
+class TestGenerateFieldEdgeCases:
+    """handle_generate_field: 边界case"""
+
+    @pytest.mark.asyncio
+    @patch("novel_agent.agent.tools.generate.NovelMemory")
+    @patch("novel_agent.agent.tools.generate.generate_field_stream")
+    @patch("novel_agent.agent.tools.generate.get_writer")
+    async def test_reset_signal_with_partial_save(self, mock_writer, mock_stream, mock_mm):
+        mock_writer.return_value = lambda x: None
+        mock_mm.save_field_content = MagicMock()
+
+        from novel_agent.agent.generation.base import _RESET
+
+        async def fake_stream(*args, **kwargs):
+            for i in range(300):
+                yield "X"
+            yield _RESET
+            for i in range(100):
+                yield "Y"
+
+        mock_stream.return_value = fake_stream()
+
+        ns = _make_novel_state()
+        state = _make_chat_state(ns, user_request="生成设定")
+
+        from novel_agent.agent.tools.generate import handle_generate_field
+        await handle_generate_field(state, "settings_md_content", "写作设定")
+        calls = [c[0][2] for c in mock_mm.save_field_content.call_args_list if len(c[0]) > 2]
+        if calls:
+            assert any("X" in c for c in calls)
+
+
+# ======================================================================
+# update.py: _fuzzy_find 模糊匹配
+# ======================================================================
+
+
+class TestFuzzyFind:
+    def test_exact_match(self):
+        from novel_agent.agent.tools.update import _fuzzy_find
+        pos = _fuzzy_find("abc def ghi", "abc def")
+        assert pos == 0
+
+    def test_normalized_whitespace_match(self):
+        from novel_agent.agent.tools.update import _fuzzy_find
+        pos = _fuzzy_find("abc   def\nghi", "abc def")
+        assert pos is not None
+        assert pos == 0
+
+    def test_no_match_returns_none(self):
+        from novel_agent.agent.tools.update import _fuzzy_find
+        pos = _fuzzy_find("abc def", "xyz")
+        assert pos is None
+
+    def test_multiline_needle(self):
+        from novel_agent.agent.tools.update import _fuzzy_find
+        pos = _fuzzy_find("line1\n  line2  \nline3", "line1\nline2")
+        assert pos is not None
+        assert pos == 0
+
+    def test_empty_haystack(self):
+        from novel_agent.agent.tools.update import _fuzzy_find
+        pos = _fuzzy_find("", "needle")
+        assert pos is None
+
+    def test_empty_needle_returns_none(self):
+        from novel_agent.agent.tools.update import _fuzzy_find
+        pos = _fuzzy_find("haystack", "")
+        assert pos == 0
+
+    def test_chinese_text_match(self):
+        from novel_agent.agent.tools.update import _fuzzy_find
+        pos = _fuzzy_find("主角李明是一个年轻的剑客", "李明是")
+        assert pos is not None
+        assert pos == 2
+
+    def test_chinese_whitespace_normalized_match(self):
+        from novel_agent.agent.tools.update import _fuzzy_find
+        pos = _fuzzy_find("主角  李明  是一个\n年轻的剑客", "主角 李明")
+        assert pos is not None
+        assert pos == 0

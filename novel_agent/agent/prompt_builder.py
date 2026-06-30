@@ -28,6 +28,7 @@ from .templates import load_template
 from .memory.conversation import ConversationMemory
 from .memory.novel import NovelMemory
 from .memory.conversation.session import Session
+from ..core.outline_utils import outline_future_is_empty
 from ..config import tc
 from ..core.models import NovelState
 
@@ -136,7 +137,11 @@ class PromptBuilder:
             book_title=novel_state.meta.title or "未设置",
             total_chapters=novel_state.meta.total_chapters,
             settings_status="有" if novel_state.settings_md_content else "无",
-            outline_status="有" if novel_state.outline_future_md_content else "无",
+            outline_status=(
+                "无有效细纲"
+                if outline_future_is_empty(novel_state.outline_future_md_content)
+                else "有"
+            ),
             characters_status="有" if novel_state.characters_md_content else "无",
             foreshadowing_status="有" if novel_state.foreshadowing_md_content else "无",
             completed_steps_text=completed_steps_text,

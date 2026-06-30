@@ -15,6 +15,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import ChatPanel from '@/components/ChatPanel.vue'
 import { useChatStore, useEditorStore } from '@/stores'
+import { createSseHandler } from '@/composables/useSseHandler'
 
 vi.mock('@/api', () => ({
   chatStream: vi.fn(),
@@ -110,6 +111,22 @@ describe('ChatPanel', () => {
     expect(wrapper.text()).toContain('回复内容')
   })
 
+  it('renders history activity in messages', async () => {
+    const chatStore = useChatStore()
+    chatStore.addAgentMessage('回复内容', undefined, [
+      { kind: 'tool', label: '续写章节', tool: 'continue_writing', status: 'done' },
+    ])
+
+    const wrapper = mount(ChatPanel, {
+      global: { stubs: { teleport: true } },
+    })
+
+    expect(wrapper.text()).toContain('执行过程')
+    const header = wrapper.find('.activity-block .thinking-header')
+    await header.trigger('click')
+    expect(wrapper.text()).toContain('续写章节')
+  })
+
   it('shows send button when not generating', () => {
     const wrapper = mount(ChatPanel, {
       global: { stubs: { teleport: true } },
@@ -183,5 +200,24 @@ describe('ChatPanel', () => {
     expect(messages[0].classes()).toContain('user')
     expect(messages[1].classes()).toContain('assistant')
     expect(messages[2].classes()).toContain('user')
+  })
+
+  it('uses injected handleEvent so chapter_title updates parent UI title', () => {
+    const editorStore = useEditorStore()
+    const chatStore = useChatStore()
+    let chapterTitle = ''
+    const handleEvent = createSseHandler(chatStore, editorStore, {
+      onChapterTitle: (title) => { chapterTitle = title },
+    })
+
+    mount(ChatPanel, {
+      props: { handleEvent },
+      global: { stubs: { teleport: true } },
+    })
+
+    handleEvent({ type: 'chapter_title', title: '正文卷 第6章 查账寻踪', chapter_num: 6 })
+
+    expect(editorStore.pendingChapterTitle).toBe('正文卷 第6章 查账寻踪')
+    expect(chapterTitle).toBe('正文卷 第6章 查账寻踪')
   })
 })

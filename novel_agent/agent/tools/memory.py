@@ -92,7 +92,7 @@ async def handle_memory_consolidate(state, field: str) -> str:
         field_name = field
 
     if field_name not in FieldRegistry.fields():
-        return f"不支持的字段：{field}。可选：settings, characters, relationships, foreshadowing, outline_historical, outline_future"
+        return f"不支持的字段：{field}。可选：settings, characters, locations, relationships, foreshadowing, outline_future"
 
     label = FieldRegistry.label(field_name)
     try:

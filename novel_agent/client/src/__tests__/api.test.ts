@@ -140,7 +140,7 @@ describe('API function signatures', () => {
       'listBooks', 'createBook', 'selectBook', 'deleteBook',
       'getState', 'getChapterContent', 'addChapter', 'updateChapter',
       'deleteChapter', 'updateField', 'getChatHistory', 'clearChat',
-      'chatStream', 'resumeStream', 'importChaptersBatch',
+      'chatStream', 'resumeStream',
     ]
     for (const fn of expectedFns) {
       expect(typeof api[fn as keyof typeof api]).toBe('function')
@@ -169,13 +169,6 @@ describe('Request construction', () => {
     const body = JSON.stringify({ value: true })
     const parsed = JSON.parse(body)
     expect(parsed.value).toBe(true)
-  })
-
-  it('importChaptersBatch uses FormData', () => {
-    const formData = new FormData()
-    const file = new File(['[]'], 'test.json', { type: 'application/json' })
-    formData.append('file', file)
-    expect(formData.get('file')).toBeInstanceOf(File)
   })
 })
 

@@ -1,4 +1,4 @@
-import type { SseEvent, AgentActivityStep } from '@/types'
+import type { SseEvent, AgentActivityStep, NovelState } from '@/types'
 import type { useChatStore, useEditorStore } from '@/stores'
 
 type ChatStore = ReturnType<typeof useChatStore>
@@ -113,6 +113,17 @@ export function createSseHandler(
       case 'plan_replan':
         hooks.onPlanReplan?.(evt)
         break
+      case 'daily_sync_start':
+      case 'daily_sync_done':
+        break
+      case 'state':
+        if (evt.type === 'state' && evt.state) {
+          editorStore.applyRemoteState(evt.state)
+        }
+        break
+      case 'critic_review_start':
+      case 'critic_review_done':
+        break
     }
   }
 }
@@ -141,6 +152,8 @@ export async function consumeStream(
         chatStore.streamingActivity.length ? [...chatStore.streamingActivity] : undefined,
       )
     }
+    // Wait one frame so Vue renders the new message before clearing streaming state
+    await new Promise(resolve => setTimeout(resolve, 0))
     chatStore.streamingContent = ''
     chatStore.streamingActivity = []
     chatStore.reasoningContent = ''

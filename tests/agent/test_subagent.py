@@ -501,7 +501,7 @@ class TestCollectArtifactsAndFields:
         assert "outline" in modified_fields
 
     def test_update_outline_tools(self):
-        for tool_name in ("update_outline", "update_outline_historical", "update_outline_future"):
+        for tool_name in ("update_outline", "update_chapter_summaries"):
             artifacts = []
             modified_fields = []
             Subagent._collect_artifacts_and_fields(
@@ -509,7 +509,11 @@ class TestCollectArtifactsAndFields:
                 {"function": {"name": tool_name, "arguments": "{}"}},
                 MagicMock(), artifacts, modified_fields,
             )
-            expected_field = tool_name.replace("update_", "")
+            expected_field = (
+                "outline_structure"
+                if tool_name == "update_chapter_summaries"
+                else tool_name.replace("update_", "")
+            )
             assert expected_field in modified_fields
 
     def test_scan_foreshadowing(self):

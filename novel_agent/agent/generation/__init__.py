@@ -2,7 +2,7 @@
 生成能力模块
 提供 Agent 的 LLM 生成能力，包括：
 - 章节正文流式生成
-- 章节标题生成
+- 章节标题解析（来自 outline_future）
 - 字段增量生成
 - 字段局部修改
 本模块是 Agent 的 Execution 层（参考 OpenClaw 架构），

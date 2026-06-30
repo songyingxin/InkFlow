@@ -139,6 +139,41 @@ class TestChatStore:
         store.save_message("session1", msg)
         messages = store.load_recent_messages("session1")
         assert len(messages) >= 1
+        assert messages[0].get("thinking") == "思考过程"
+
+    def test_save_user_display_content(self, tmp_path):
+        from novel_agent.agent.memory.conversation import ChatStore
+        store = ChatStore(tmp_path / "chat.db")
+        store.save_message(
+            "session1",
+            {
+                "role": "user",
+                "content": "展开后的长引用内容",
+                "display_content": "续写下一章",
+            },
+        )
+        ui_messages = store.load_recent_messages("session1")
+        agent_messages = store.load_recent_messages("session1", for_agent=True)
+        assert ui_messages[0]["content"] == "续写下一章"
+        assert agent_messages[0]["content"] == "展开后的长引用内容"
+
+    def test_load_activity_from_subagent_trace(self, tmp_path):
+        import json
+        from novel_agent.agent.memory.conversation import ChatStore
+
+        store = ChatStore(tmp_path / "chat.db")
+        trace = json.dumps(
+            {"agent": "creator", "called_tools": ["continue_writing", "task_complete"]},
+            ensure_ascii=False,
+        )
+        store.save_message(
+            "session1",
+            {"role": "assistant", "content": "已续写完成"},
+            metadata={"subagent_trace": trace},
+        )
+        messages = store.load_recent_messages("session1")
+        assert messages[0]["activity"]
+        assert any(s.get("tool") == "continue_writing" for s in messages[0]["activity"])
 
     def test_load_recent_messages_with_rounds(self, tmp_path):
         from novel_agent.agent.memory.conversation import ChatStore

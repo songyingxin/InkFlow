@@ -130,7 +130,7 @@ class TestFieldRegistryMapping:
         expected = {
             "settings_md_content",
             "characters_md_content",
-            "outline_historical_md_content",
+            "locations_md_content",
             "outline_future_md_content",
             "relationships_md_content",
             "foreshadowing_md_content",
@@ -146,10 +146,10 @@ class TestFieldRegistryMapping:
     def test_sidebar_fields_are_subset_of_valid(self):
         from novel_agent.agent.generation.fields import VALID_FIELDS
         sidebar_fields = {
-            "outline_historical_md_content",
             "outline_future_md_content",
             "settings_md_content",
             "characters_md_content",
+            "locations_md_content",
             "relationships_md_content",
             "foreshadowing_md_content",
         }
@@ -158,7 +158,6 @@ class TestFieldRegistryMapping:
     def test_frontend_sidebar_fields_match_backend(self):
         content = _read_ts_file("types/index.ts")
         sidebar_fields = [
-            "outline_historical_md_content",
             "outline_future_md_content",
             "settings_md_content",
             "characters_md_content",
@@ -203,6 +202,7 @@ class TestFrontendPlaceholders:
         placeholders = [
             "暂无设定",
             "暂无角色",
+            "暂无地点",
             "暂无大纲",
             "暂无伏笔",
             "暂无关系图谱",
@@ -215,7 +215,7 @@ class TestFrontendPlaceholders:
         labels = [
             "写作设定",
             "角色档案",
-            "历史大纲",
+            "地点档案",
             "未来大纲",
             "关系图谱",
             "伏笔清单",
@@ -250,22 +250,23 @@ class TestFrontendRoutes:
 
 class TestFrontendComponentLogic:
     def test_chat_panel_handles_all_sse_types(self):
-        content = _read_ts_file("components/ChatPanel.vue")
+        content = _read_ts_file("composables/useSseHandler.ts")
         event_types = [
             "token", "error", "done", "reasoning",
             "assistant_reply", "task_complete", "chapter_title",
             "generate_start", "generate_token", "generate_reset",
             "generate_done", "field_content", "interrupt",
             "handoff", "subagent_token", "subagent_tool_call",
+            "agent_activity",
             "plan_generated", "plan_step_start", "plan_step_complete",
-            "plan_completed",
+            "plan_completed", "plan_replan",
         ]
         for evt in event_types:
             assert evt in content, f"ChatPanel 未处理事件: {evt}"
 
     def test_sidebar_shows_all_field_sections(self):
         content = _read_ts_file("components/SideBar.vue")
-        sections = ["设定", "章节"]
+        sections = ["创作依据", "章节"]
         for section in sections:
             assert section in content, f"SideBar 缺少区域: {section}"
 

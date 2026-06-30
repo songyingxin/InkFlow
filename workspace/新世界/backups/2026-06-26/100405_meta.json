@@ -1,0 +1,23 @@
+{
+  "title": "新世界",
+  "total_chapters": 6,
+  "settings_read_ch": 4,
+  "characters_read_ch": 4,
+  "relationships_read_ch": 4,
+  "foreshadowing_read_ch": 4,
+  "locations_read_ch": 4,
+  "outline_future_read_ch": 4,
+  "round_count": 204,
+  "chapter_content_hashes": {
+    "1": "05d6dc45304fa1ba",
+    "2": "fe2b44850a801b54",
+    "3": "534b07036a1d42e9",
+    "4": "a9779c329a26d04b",
+    "5": "5fa197cf5f777ce7fd4c2fab9dbf0b6b",
+    "6": "b3b711d4c2c34d4cfdf404ec6f3e4c5e"
+  },
+  "last_daily_sync_date": "",
+  "daily_sync_dismissed_date": "",
+  "daily_sync_prompt_hour": 8,
+  "daily_sync_enabled": true
+}

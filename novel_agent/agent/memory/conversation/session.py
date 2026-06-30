@@ -14,11 +14,14 @@
 """
 
 import time
+import logging
 from dataclasses import dataclass
 
 from ....config import tc
 from ....core.models import NovelState
 from .session_store import get_session_store
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -96,7 +99,7 @@ class Session:
                 model="",
             )
         except Exception:
-            pass
+            logger.warning("Session 创建持久化失败", exc_info=True)
 
     def end(self, conversation_memory=None):
         info = self._get_or_create_info()
@@ -110,7 +113,7 @@ class Session:
             store.end_session(info.session_id, end_reason="normal")
             store.update_round_count(info.session_id, info.round_count)
         except Exception:
-            pass
+            logger.warning("Session 结束持久化失败", exc_info=True)
 
         from .conversation import ConversationMemory
         ConversationMemory.flush_short_memory(self._state)
@@ -185,6 +188,7 @@ class Session:
             store = get_session_store(state)
             return store.get_last_session(state.meta.title or "")
         except Exception:
+            logger.debug("查询最近 session 失败", exc_info=True)
             return None
 
     @staticmethod
@@ -195,6 +199,7 @@ class Session:
                 book_title=state.meta.title or "", limit=limit
             )
         except Exception:
+            logger.debug("查询 session 列表失败", exc_info=True)
             return []
 
     # ── Plan 状态持久化 ──────────────────────────────────────────
@@ -214,7 +219,7 @@ class Session:
                 plan_status=plan_status,
             )
         except Exception:
-            pass
+            logger.warning("Plan 状态持久化失败", exc_info=True)
 
     @staticmethod
     def restore_plan_state(state: NovelState) -> tuple[list[dict], int, str] | None:
@@ -234,4 +239,5 @@ class Session:
                 return None
             return plan, record.plan_step, record.plan_status
         except Exception:
+            logger.debug("Plan 状态恢复失败", exc_info=True)
             return None

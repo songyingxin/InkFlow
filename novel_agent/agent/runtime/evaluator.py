@@ -151,4 +151,8 @@ async def evaluate_completion(
         return {"completed": completed, "reason": result, "suggestion": ""}
     except Exception as e:
         logger.warning(f"evaluator LLM 调用失败：{e}")
-        return {"completed": True, "reason": "评估器异常，默认视为完成", "suggestion": ""}
+        return {
+            "completed": False,
+            "reason": "评估器异常，无法确认完成",
+            "suggestion": "请重试或检查 LLM 配置",
+        }

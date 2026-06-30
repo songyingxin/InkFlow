@@ -15,7 +15,7 @@
   python -m pytest tests/agent/test_memory_system.py -v
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -222,28 +222,31 @@ class TestSearchMemoryChatSource:
 # ======================================================================
 
 class TestChapterContentHashTracking:
-    def test_update_outline_stores_hash(self):
-        from novel_agent.agent.tools.chapter import _update_outline_after_write
+    @pytest.mark.asyncio
+    async def test_update_outline_stores_hash(self):
+        from novel_agent.agent.tools.chapter import _finalize_chapter_write
         ns = _make_novel_state()
-        _update_outline_after_write(ns, 1, "第一章", "这是第一章的内容")
+        await _finalize_chapter_write(ns, 1, "第一章", "这是第一章的内容")
         ch = ns.find_chapter_in_outline(1)
         assert ch.content_hash != ""
 
-    def test_hash_changes_on_rewrite(self):
-        from novel_agent.agent.tools.chapter import _update_outline_after_write
+    @pytest.mark.asyncio
+    async def test_hash_changes_on_rewrite(self):
+        from novel_agent.agent.tools.chapter import _finalize_chapter_write
         ns = _make_novel_state()
-        _update_outline_after_write(ns, 1, "第一章", "原始内容")
+        await _finalize_chapter_write(ns, 1, "第一章", "原始内容")
         hash_v1 = ns.find_chapter_in_outline(1).content_hash
-        _update_outline_after_write(ns, 1, "第一章（修改）", "修改后的内容")
+        await _finalize_chapter_write(ns, 1, "第一章（修改）", "修改后的内容")
         hash_v2 = ns.find_chapter_in_outline(1).content_hash
         assert hash_v1 != hash_v2
 
-    def test_meta_hash_not_updated_on_outline_write(self):
-        from novel_agent.agent.tools.chapter import _update_outline_after_write
+    @pytest.mark.asyncio
+    async def test_meta_hash_not_updated_on_outline_write(self):
+        from novel_agent.agent.tools.chapter import _finalize_chapter_write
         ns = _make_novel_state()
-        _update_outline_after_write(ns, 1, "第一章", "内容1")
-        _update_outline_after_write(ns, 2, "第二章", "内容2")
-        assert len(ns.meta.chapter_content_hashes) == 0
+        await _finalize_chapter_write(ns, 1, "第一章", "内容1")
+        await _finalize_chapter_write(ns, 2, "第二章", "内容2")
+        assert len(ns.meta.chapter_content_hashes) == 2
 
 
 # ======================================================================

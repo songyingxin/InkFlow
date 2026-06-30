@@ -39,16 +39,22 @@
           <div class="msg-body">
             <div class="msg-name">{{ msg.role === 'user' ? '我' : '墨灵' }}</div>
             <div class="msg-bubble">
-              <div v-if="msg.thinking" class="thinking-block history-thinking">
-                <div class="thinking-header collapsed" @click="toggleHistoryThinking(i)">
-                  <span class="history-thinking-label">已深度思考</span>
+              <div v-if="msg.thinking" class="thinking-block">
+                <div
+                  class="thinking-header collapsed"
+                  @click="toggleHistoryThinking(i)"
+                >
+                  <span>已深度思考</span>
                   <span class="thinking-toggle">{{ historyThinkingOpen[i] ? '▾' : '▸' }}</span>
                 </div>
                 <div v-if="historyThinkingOpen[i]" class="thinking-body" v-text="msg.thinking" />
               </div>
-              <div v-if="msg.activity?.length" class="thinking-block history-thinking activity-block">
-                <div class="thinking-header collapsed" @click="toggleHistoryActivity(i)">
-                  <span class="history-thinking-label">执行过程（{{ msg.activity.length }} 步）</span>
+              <div v-if="msg.activity?.length" class="thinking-block activity-block">
+                <div
+                  class="thinking-header collapsed"
+                  @click="toggleHistoryActivity(i)"
+                >
+                  <span>执行过程（{{ msg.activity.length }} 步）</span>
                   <span class="thinking-toggle">{{ historyActivityOpen[i] ? '▾' : '▸' }}</span>
                 </div>
                 <ul v-if="historyActivityOpen[i]" class="activity-list">
@@ -95,7 +101,7 @@
               </ul>
             </div>
             <div v-if="chatStore.streamingContent" class="streaming-content">
-              <div class="chat-md" v-html="renderMarkdown(chatStore.streamingContent)" />
+              <div class="chat-md" v-html="throttledStreamingHtml" />
               <span class="streaming-cursor" />
             </div>
           </div>
@@ -155,21 +161,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
-import { useChatStore, useEditorStore, useConfirmStore } from '@/stores'
-import { chatStream, resumeStream } from '@/api'
+import { ref, nextTick, watch, onUnmounted } from 'vue'
+import { useChatStore, useEditorStore } from '@/stores'
+import { chatStream } from '@/api'
 import { marked } from 'marked'
 import type { SseEvent } from '@/types'
-import { createSseHandler, consumeStream } from '@/composables/useSseHandler'
+import { consumeStream } from '@/composables/useSseHandler'
 
 const props = defineProps<{
   confirmUnsaved?: (actionLabel: string) => Promise<'cancel' | 'discard' | 'save'>
   saveCurrent?: () => Promise<void>
+  /** 由 EditorPage 注入，确保 chapter_title / generate_* 等事件同步到编辑器 */
+  handleEvent: (evt: SseEvent) => void
 }>()
 
 const chatStore = useChatStore()
 const editorStore = useEditorStore()
-const confirmStore = useConfirmStore()
 
 const inputText = ref('')
 const chatInputRef = ref<HTMLTextAreaElement>()
@@ -219,7 +226,6 @@ function buildMentionItems(query: string): MentionItem[] {
 
   const fields: [string, string, string][] = [
     ['settings_md_content', '写作设定', '⚙'],
-    ['outline_historical_md_content', '历史大纲', '📜'],
     ['outline_future_md_content', '未来大纲', '📜'],
     ['characters_md_content', '角色档案', '👤'],
     ['relationships_md_content', '关系图谱', '🔗'],
@@ -320,6 +326,30 @@ function renderMarkdown(md: string) {
   return marked.parse(md) as string
 }
 
+/** 流式生成时防闪烁：throttle markdown 渲染到 ~80ms */
+const throttledStreamingHtml = ref('')
+let _throttleTimer: ReturnType<typeof setTimeout> | null = null
+let _nextRaw = ''
+
+function _flushThrottle() {
+  _throttleTimer = null
+  throttledStreamingHtml.value = renderMarkdown(_nextRaw)
+}
+
+watch(
+  () => chatStore.streamingContent,
+  (raw) => {
+    _nextRaw = raw
+    if (!_throttleTimer) {
+      _throttleTimer = setTimeout(_flushThrottle, 100)
+    }
+  },
+)
+
+onUnmounted(() => {
+  if (_throttleTimer) clearTimeout(_throttleTimer)
+})
+
 function autoResize() {
   const ta = chatInputRef.value
   if (!ta) return
@@ -366,7 +396,7 @@ async function sendMessage() {
   editorStore.startGeneration()
   const myController = editorStore.abortController
 
-  const stream = chatStream(expandedText, editorStore.fieldValues, myController?.signal)
+  const stream = chatStream(expandedText, editorStore.fieldValues, myController?.signal, text)
   await consumeStream(stream, {
     chatStore, editorStore, handleEvent,
     includeThinking: true,
@@ -374,33 +404,8 @@ async function sendMessage() {
   })
 }
 
-const handleEvent = createSseHandler(chatStore, editorStore, {
-  onInterrupt: (evt) => handleInterrupt(evt),
-})
-
-async function handleInterrupt(evt: SseEvent) {
-  if (evt.type !== 'interrupt') return
-  const msg = evt.interrupt.message || 'Agent 需要你的确认才能继续'
-  const ok = await confirmStore.confirm({
-    title: '需要确认',
-    desc: msg + '\n\n点击"确认"继续，点击"取消"跳过',
-    confirmText: '继续',
-    cancelText: '跳过',
-  })
-
-  editorStore.startGeneration()
-  chatStore.streamingContent = ''
-  chatStore.streamingActivity = []
-  chatStore.reasoningContent = ''
-  chatStore.showThinking = false
-  chatStore.thinkingCollapsed = false
-  streamingActivityCollapsed.value = false
-
-  const stream = resumeStream(ok, editorStore.abortController?.signal)
-  await consumeStream(stream, {
-    chatStore, editorStore, handleEvent,
-    includeThinking: true,
-  })
+function handleEvent(evt: SseEvent) {
+  ;(props.handleEvent)(evt)
 }
 
 watch(
@@ -643,28 +648,6 @@ function onResizeMoveFn(ev: MouseEvent, state: ResizeState) {
 }
 
 .thinking-toggle { margin-left: auto; font-size: 10px; opacity: 0.5; }
-
-.history-thinking {
-  border: none; border-radius: 0;
-  margin-bottom: 0; padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.history-thinking .thinking-header {
-  padding: 0 0 4px 0; font-size: 12px;
-  color: var(--text-faint); background: transparent;
-}
-
-.history-thinking .thinking-header:hover { background: transparent; }
-
-.history-thinking-label { font-weight: 500; }
-
-.history-thinking .thinking-body {
-  padding: 8px 0 0 0; border-top: none;
-  background: transparent; font-size: 12px;
-  color: var(--text-muted); line-height: 1.6;
-  max-height: 200px; overflow-y: auto;
-}
 
 .thinking-body {
   padding: 10px 14px; font-size: 12px; line-height: 1.6;

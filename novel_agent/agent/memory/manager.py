@@ -4,7 +4,7 @@
 
 子系统：
   ConversationMemory  → 对话记忆（chat.db / short_memory.md / MEMORY.md / 上下文构建）
-  NovelMemory         → 小说记忆（6 字段文件 / chapters / outline_structure / meta）
+  NovelMemory         → 小说记忆（5 字段文件 / chapters / outline_structure / meta）
 """
 
 from pathlib import Path
@@ -43,12 +43,14 @@ def index_all_memory_files(state: NovelState):
     mf = state.memory_files
     file_source_map = [
         ("field", mf.settings_path),
-        ("field", mf.outline_historical_path),
         ("field", mf.outline_future_path),
         ("field", mf.characters_path),
+        ("field", mf.locations_path),
         ("field", mf.relationships_path),
         ("field", mf.foreshadowing_path),
     ]
+    if mf.outline_structure_path and mf.outline_structure_path.exists():
+        file_source_map.append(("field", mf.outline_structure_path))
     for source, path in file_source_map:
         if path and Path(path).exists():
             idx.index_file(source, Path(path))

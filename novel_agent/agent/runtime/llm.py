@@ -195,17 +195,39 @@ async def chat(
 
 
 async def chat_stream(
-    messages: list[dict], model: str = None
+    messages: list[dict],
+    model: str = None,
+    max_retries: int = 3,
 ) -> AsyncGenerator[str, None]:
     client = _get_client()
     model = model or DEFAULT_MODEL
-    response = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.7,
-        max_tokens=100000,
-        stream=True,
-    )
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=100000,
+                stream=True,
+            )
+            break
+        except Exception as e:
+            last_error = e
+            if _is_context_overflow(e):
+                raise ContextOverflowError(e) from e
+            if not _is_transient_error(e):
+                raise
+            delay = _jittered_backoff(attempt)
+            logger.warning(
+                "chat_stream API 瞬态错误，%.1fs 后重试 (%d/%d)...",
+                delay,
+                attempt + 1,
+                max_retries,
+            )
+            await asyncio.sleep(delay)
+    else:
+        raise last_error
     async for chunk in response:
         if chunk.choices and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content

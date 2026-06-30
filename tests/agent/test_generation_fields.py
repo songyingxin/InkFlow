@@ -55,10 +55,10 @@ def _make_novel_state(**kwargs):
 class TestFieldConfigs:
     def test_all_fields_have_config(self):
         expected = {
-            "outline_historical_md_content",
             "outline_future_md_content",
             "settings_md_content",
             "characters_md_content",
+            "locations_md_content",
             "relationships_md_content",
             "foreshadowing_md_content",
         }
@@ -81,7 +81,7 @@ class TestFieldConfigs:
 
 class TestUpdateFieldShortNames:
     def test_all_short_names_map_to_full(self):
-        expected_short = {"settings", "outline_historical", "outline_future", "characters", "relationships", "foreshadowing"}
+        expected_short = {"settings", "outline_future", "characters", "locations", "relationships", "foreshadowing"}
         assert set(_UPDATE_FIELD_SHORT_NAMES.keys()) == expected_short
 
     def test_short_names_map_to_valid_fields(self):

@@ -15,6 +15,7 @@ Subagent 基类与生命周期管理
 """
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -104,6 +105,8 @@ class SubagentResult:
 
 
 from .activity import TOOL_LABELS as _TOOL_LABELS, build_activity_trace
+
+logger = logging.getLogger(__name__)
 
 
 class Subagent:
@@ -384,7 +387,7 @@ class Subagent:
                                     f"建议：\n"
                                     f"- 如果是 update_field patches 匹配失败，尝试用 user_request 模式\n"
                                     f"- 如果是参数格式错误，仔细检查参数类型和必填项\n"
-                                    f"- 如果是字段不存在，先 read_novel_content 确认可用字段"
+                                    f"- 如果是字段不存在，核对 field 参数（settings/characters/relationships/foreshadowing/outline_future）"
                                 ),
                             }
                             messages.append(pivot_msg)
@@ -628,7 +631,7 @@ class Subagent:
             if polished:
                 return polished[: tc.user_reply_chars]
         except Exception:
-            pass
+            logger.debug("用户回复润色失败，使用原文截断", exc_info=True)
         return text[: tc.user_reply_chars]
 
     async def _compress_user_reply(
@@ -670,7 +673,7 @@ class Subagent:
             if compressed:
                 return compressed[: tc.user_reply_chars]
         except Exception:
-            pass
+            logger.debug("用户回复压缩失败，使用 fallback 截断", exc_info=True)
         return fallback[: tc.user_reply_chars]
 
     @staticmethod
@@ -701,8 +704,10 @@ class Subagent:
                     modified_fields.append(field)
             except (json.JSONDecodeError, TypeError):
                 pass
-        elif func_name in ("update_outline", "update_outline_historical", "update_outline_future"):
+        elif func_name in ("update_outline", "update_chapter_summaries"):
             field = func_name.replace("update_", "")
+            if field == "chapter_summaries":
+                field = "outline_structure"
             if field not in modified_fields:
                 modified_fields.append(field)
         elif func_name == "scan_foreshadowing":

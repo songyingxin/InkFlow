@@ -11,6 +11,18 @@
         <span class="header-book-name">{{ editorStore.currentBookName || '墨灵' }}</span>
       </div>
       <div class="header-actions">
+        <button
+          class="btn btn-sync"
+          :class="{ 'has-pending': syncStatus?.has_pending }"
+          :disabled="syncing || !syncStatus?.has_pending"
+          title="将近期章节沉淀进章摘要、角色、地点、关系、伏笔与写作设定（不改未来细纲）"
+          @click="openSyncConfirm"
+        >
+          同步设定
+          <span v-if="syncStatus?.has_pending && syncStatus.pending_chapters > 0" class="sync-badge">
+            {{ syncStatus.pending_chapters }}
+          </span>
+        </button>
         <button class="sidebar-toggle" @click="editorStore.toggleSidebar()" title="切换侧边栏 (Ctrl+\\)" aria-label="切换侧边栏">
           <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <line x1="2" y1="4" x2="14" y2="4" /><line x1="2" y1="8" x2="14" y2="8" /><line x1="2" y1="12" x2="14" y2="12" />
@@ -19,8 +31,18 @@
       </div>
     </header>
 
+    <div v-if="showSyncBanner" class="sync-banner">
+      <span>
+        有 {{ syncStatus?.pending_chapters }} 章尚未同步到设定（第 {{ syncStatus?.chapter_from }}–{{ syncStatus?.chapter_to }} 章）
+      </span>
+      <div class="sync-banner-actions">
+        <button class="btn btn-sync-inline" @click="openSyncConfirm">立即同步</button>
+        <button class="btn btn-ghost" @click="dismissSyncBanner">今天不再提醒</button>
+      </div>
+    </div>
+
     <div class="main" :class="{ 'sidebar-hidden': !editorStore.sidebarVisible }">
-      <SideBar @show-import="showImportModal = true" @field-changed="onFieldChanged" @gen-field="onGenField" />
+      <SideBar @field-changed="onFieldChanged" @gen-field="onGenField" />
 
       <div class="chapter-view" :class="{ 'has-editor': !!editorStore.editingField }">
         <template v-if="!editorStore.editingField">
@@ -49,134 +71,53 @@
           </div>
         </template>
 
-        <template v-else-if="editorStore.editingField === 'title'">
-          <MarkdownEditor
-            title="小说标题"
-            :content="titleValue"
-            :show-mode-btns="false"
-            :generating="editorStore.isGenerating"
-            :saving="saving"
-            :can-undo="canUndo"
-            :can-redo="canRedo"
-            @update:content="onContentInput"
-            @save="saveTitle"
-            @stop="editorStore.stopGeneration()"
-            @undo="doUndo"
-            @redo="doRedo"
-          />
-        </template>
-
-        <template v-else-if="editorStore.editingField === 'chapter_new'">
-          <MarkdownEditor
-            title="新建章节"
-            :content="editorStore.streamingChapterContent"
-            :chapter-title="chapterTitle"
-            :show-chapter-title="true"
-            :generating="editorStore.isGenerating"
-            :saving="saving"
-            :streaming="isStreamingToField"
-            :can-undo="canUndo"
-            :can-redo="canRedo"
-            placeholder="撰写章节内容..."
-            @update:content="onContentInput"
-            @update:chapter-title="chapterTitle = $event"
-            @save="saveNewChapter"
-            @stop="editorStore.stopGeneration()"
-            @switch-mode="editorStore.mdPreviewMode = $event === 'preview'"
-            @undo="doUndo"
-            @redo="doRedo"
-          />
-        </template>
-
-        <template v-else-if="editorStore.isChapterField(editorStore.editingField)">
-          <MarkdownEditor
-            :title="'第' + editorStore.getChapterIdx() + '章'"
-            :content="editorStore.streamingChapterContent"
-            :chapter-title="chapterTitle"
-            :show-chapter-title="true"
-            :preview-mode="editorStore.mdPreviewMode"
-            :generating="editorStore.isGenerating"
-            :saving="saving"
-            :streaming="isStreamingToField"
-            :can-undo="canUndo"
-            :can-redo="canRedo"
-            :highlights="editorStore.fieldHighlights[editorStore.editingField]"
-            :pre-edit-content="editorStore.preEditContent[editorStore.editingField]"
-            placeholder="撰写章节内容..."
-            @update:content="onContentInput"
-            @update:chapter-title="chapterTitle = $event"
-            @save="saveChapterEdit"
-            @stop="editorStore.stopGeneration()"
-            @switch-mode="editorStore.mdPreviewMode = $event === 'preview'"
-            @undo="doUndo"
-            @redo="doRedo"
-            @update-highlights="onUpdateHighlights"
-          />
-        </template>
-
-        <template v-else>
-          <MarkdownEditor
-            :title="fieldTitle"
-            :content="editorStore.streamingFieldContent"
-            :preview-mode="editorStore.mdPreviewMode"
-            :generating="editorStore.isGenerating"
-            :saving="saving"
-            :streaming="isStreamingToField"
-            :can-undo="canUndo"
-            :can-redo="canRedo"
-            :highlights="editorStore.fieldHighlights[editorStore.editingField]"
-            :pre-edit-content="editorStore.preEditContent[editorStore.editingField]"
-            @update:content="onContentInput"
-            @save="saveFieldEdit"
-            @stop="editorStore.stopGeneration()"
-            @switch-mode="editorStore.mdPreviewMode = $event === 'preview'"
-            @undo="doUndo"
-            @redo="doRedo"
-            @update-highlights="onUpdateHighlights"
-          />
-        </template>
+        <MarkdownEditor
+          v-else
+          :title="editorPanelTitle"
+          :content="editorPanelContent"
+          :chapter-title="chapterTitle"
+          :show-chapter-title="isChapterView"
+          :show-mode-btns="!isTitleField"
+          :preview-mode="isTitleField ? false : editorStore.mdPreviewMode"
+          :generating="editorStore.isGenerating"
+          :saving="saving"
+          :streaming="isStreamingToField"
+          :can-undo="canUndo"
+          :can-redo="canRedo"
+          :highlights="editorStore.fieldHighlights[editorStore.editingField]"
+          :pre-edit-content="editorStore.preEditContent[editorStore.editingField]"
+          :placeholder="isChapterView ? '撰写章节内容...' : undefined"
+          @update:content="onContentInput"
+          @update:chapter-title="chapterTitle = $event"
+          @save="onEditorSave"
+          @stop="editorStore.stopGeneration()"
+          @switch-mode="editorStore.mdPreviewMode = $event === 'preview'"
+          @undo="doUndo"
+          @redo="doRedo"
+          @update-highlights="onUpdateHighlights"
+        />
       </div>
 
-      <ChatPanel :confirm-unsaved="confirmUnsavedBeforeAction" :save-current="doSaveCurrent" />
+      <ChatPanel
+        :confirm-unsaved="confirmUnsavedBeforeAction"
+        :save-current="doSaveCurrent"
+        :handle-event="handleEvent"
+      />
     </div>
 
     <Teleport to="body">
-      <div v-if="showImportModal" class="modal-overlay" @click.self="showImportModal = false" @keydown.esc="showImportModal = false" tabindex="-1">
+      <div v-if="showSyncModal" class="modal-overlay" @click.self="!syncing && (showSyncModal = false)" @keydown.esc="!syncing && (showSyncModal = false)" tabindex="-1">
         <div class="modal modal-wide">
-          <div class="modal-eyebrow">导入</div>
-          <h3>批量导入章节</h3>
-          <p class="modal-desc">选择一个 JSON 文件，包含章节数组，每项需含 `title` 和 `content` 字段。</p>
-          <div
-            class="import-dropzone"
-            :class="{ active: importDragActive }"
-            @click="fileInputRef?.click()"
-            @dragover.prevent="onDragOver"
-            @dragleave="onDragLeave"
-            @drop.prevent="onDrop"
-          >
-            <input ref="fileInputRef" type="file" accept=".json" style="display:none" @change="onFileChange" />
-            <div class="import-dropzone-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="12" y1="18" x2="12" y2="12" /><line x1="9" y1="15" x2="12" y2="12" /><line x1="15" y1="15" x2="12" y2="12" />
-              </svg>
-            </div>
-            <p v-if="!importFile">{{ importDragActive ? '松开选择' : '点击或拖拽 JSON 文件到此处' }}</p>
-            <p v-else class="import-file-name">{{ importFile.name }} ({{ (importFile.size / 1024).toFixed(1) }} KB)</p>
-          </div>
-          <div v-if="importPreview.length" class="import-preview">
-            <div class="import-preview-title">预览：{{ importPreview.length }} 个章节</div>
-            <div v-for="(ch, i) in importPreview.slice(0, 5)" :key="i" class="import-preview-item">{{ ch }}</div>
-            <div v-if="importPreview.length > 5" class="import-preview-more">...还有 {{ importPreview.length - 5 }} 章</div>
-          </div>
-          <div v-if="importing" class="import-progress">
-            <div class="import-progress-bar"><div class="import-progress-fill" :style="{ width: importProgress + '%' }" /></div>
-            <p class="import-progress-text">{{ importProgressText }}</p>
-          </div>
+          <div class="modal-eyebrow">设定维护</div>
+          <h3>{{ syncing ? '正在同步设定…' : '同步设定' }}</h3>
+          <p v-if="!syncing" class="modal-desc">
+            将根据第 {{ syncStatus?.chapter_from }}–{{ syncStatus?.chapter_to }} 章更新：
+            章节摘要、角色、地点、关系、伏笔、写作设定。<strong>不会修改未来细纲。</strong>
+          </p>
+          <pre v-if="syncLog" class="sync-log">{{ syncLog }}</pre>
           <div class="modal-actions">
-            <button class="modal-btn modal-btn-cancel" @click="showImportModal = false">取消</button>
-            <button class="modal-btn modal-btn-confirm" :disabled="!importFile || importing" @click="confirmImport">
-              {{ importing ? '导入中...' : '导入' }}
-            </button>
+            <button class="modal-btn modal-btn-cancel" :disabled="syncing" @click="showSyncModal = false">取消</button>
+            <button v-if="!syncing" class="modal-btn modal-btn-confirm" @click="runDailySync">开始同步</button>
           </div>
         </div>
       </div>
@@ -202,13 +143,12 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useEditorStore, useChatStore, useConfirmStore } from '@/stores'
 import { FIELD_TITLES, PLACEHOLDER_DEFAULTS } from '@/types'
-import type { SseEvent } from '@/types'
+import type { SseEvent, DailySyncStatus } from '@/types'
 import * as api from '@/api'
 import SideBar from '@/components/SideBar.vue'
 import MarkdownEditor from '@/components/MarkdownEditor.vue'
 import ChatPanel from '@/components/ChatPanel.vue'
 import { createSseHandler, consumeStream } from '@/composables/useSseHandler'
-import { useChapterImport } from '@/composables/useChapterImport'
 import { useUnsavedConfirm } from '@/composables/useUnsavedConfirm'
 import { useAutoSave } from '@/composables/useAutoSave'
 
@@ -218,12 +158,11 @@ const chatStore = useChatStore()
 const confirmStore = useConfirmStore()
 
 const saving = ref(false)
-
-const {
-  showImportModal, importFile, importing, importProgress, importProgressText,
-  importPreview, importDragActive, fileInputRef,
-  onDragOver, onDragLeave, onDrop, onFileChange, confirmImport,
-} = useChapterImport()
+const syncing = ref(false)
+const syncStatus = ref<DailySyncStatus | null>(null)
+const showSyncBanner = ref(false)
+const showSyncModal = ref(false)
+const syncLog = ref('')
 
 const {
   showUnsavedModal, unsavedModalTitle, unsavedModalDesc,
@@ -232,9 +171,27 @@ const {
 
 const titleValue = ref('')
 const chapterTitle = ref('')
-const isStreamingToField = ref(false)
 
 let _fieldLoadGuard = false
+
+const isTitleField = computed(() => editorStore.editingField === 'title')
+const isChapterView = computed(() =>
+  editorStore.editingField === 'chapter_new' || editorStore.isChapterField(editorStore.editingField),
+)
+const isStreamingToField = computed(() =>
+  editorStore.isGenerating
+  && !!editorStore.generatingTarget
+  && editorStore.editingField === editorStore.generatingTarget,
+)
+const editorPanelTitle = computed(() => {
+  if (isTitleField.value) return '小说标题'
+  if (editorStore.editingField === 'chapter_new') return '新建章节'
+  if (editorStore.isChapterField(editorStore.editingField)) {
+    return '第' + editorStore.getChapterIdx() + '章'
+  }
+  return fieldTitle.value
+})
+const editorPanelContent = computed(() => getCurrentContent())
 
 const fieldTitle = computed(() => {
   return FIELD_TITLES[editorStore.editingField] || editorStore.editingField
@@ -257,6 +214,59 @@ function goHome() {
   router.push('/')
 }
 
+async function loadSyncStatus() {
+  try {
+    syncStatus.value = await api.getDailySyncStatus()
+    showSyncBanner.value = !!syncStatus.value?.should_prompt
+  } catch {
+    syncStatus.value = null
+    showSyncBanner.value = false
+  }
+}
+
+function openSyncConfirm() {
+  if (!syncStatus.value?.has_pending) return
+  syncLog.value = ''
+  showSyncModal.value = true
+}
+
+async function dismissSyncBanner() {
+  try {
+    const res = await api.dismissDailySyncPrompt()
+    syncStatus.value = res.status
+    showSyncBanner.value = false
+  } catch { /* ignore */ }
+}
+
+const syncHandleEvent = createSseHandler(chatStore, editorStore, {
+  collapseThinkingOnToken: false,
+  onError: (evt) => { syncLog.value += `\n出错了：${evt.error || '未知错误'}\n` },
+})
+
+async function runDailySync() {
+  if (syncing.value) return
+  syncing.value = true
+  syncLog.value = ''
+  try {
+    for await (const evt of api.dailySyncStream()) {
+      syncHandleEvent(evt)
+      if (evt.type === 'token') syncLog.value += evt.token || ''
+      if (evt.type === 'daily_sync_done') {
+        syncLog.value += '\n✅ 设定同步完成\n'
+      }
+      if (evt.type === 'error') {
+        syncLog.value += `\n❌ ${evt.error}\n`
+        break
+      }
+    }
+    await loadSyncStatus()
+  } catch (e: any) {
+    syncLog.value += `\n❌ ${e.message || '同步失败'}\n`
+  } finally {
+    syncing.value = false
+  }
+}
+
 async function onFieldChanged() {
   const field = editorStore.editingField
   if (_inputDebounceTimer) { clearTimeout(_inputDebounceTimer); _inputDebounceTimer = null }
@@ -265,21 +275,33 @@ async function onFieldChanged() {
   if (field === 'title') {
     titleValue.value = editorStore.currentState?.meta?.title || ''
   } else if (field === 'chapter_new') {
-    chapterTitle.value = editorStore.pendingChapterTitle || ''
-    editorStore.streamingChapterContent = ''
+    chapterTitle.value = editorStore.pendingChapterTitle || chapterTitle.value || nextChapter.value?.title || ''
+    const resumingGeneration =
+      editorStore.isGenerating && editorStore.generatingTarget === 'chapter_new'
+    if (!resumingGeneration) {
+      editorStore.streamingChapterContent = ''
+    }
   } else if (editorStore.isChapterField(field)) {
-    const idx = editorStore.getChapterIdx()
-    if (idx) {
-      try {
-        const data = await editorStore.loadChapter(idx)
-        chapterTitle.value = data.title || ''
-        editorStore.streamingChapterContent = data.content || ''
-      } catch { /* ignore */ }
+    const onGeneratingTarget =
+      editorStore.isGenerating && field === editorStore.generatingTarget
+    if (onGeneratingTarget) {
+      chapterTitle.value = editorStore.pendingChapterTitle || chapterTitle.value || ''
+    } else {
+      const idx = editorStore.getChapterIdx()
+      if (idx) {
+        try {
+          editorStore.activeChapterIdx = idx
+          const data = await api.getChapterContent(idx)
+          chapterTitle.value = data.title || ''
+          editorStore.streamingChapterContent = data.content || ''
+        } catch { /* ignore */ }
+      }
     }
   } else {
     const raw = editorStore.fieldValues[field] || ''
     editorStore.streamingFieldContent = PLACEHOLDER_DEFAULTS.includes(raw) ? '' : raw
   }
+  void loadSyncStatus()
   nextTick(() => { _fieldLoadGuard = false })
 }
 
@@ -299,8 +321,9 @@ async function saveChapterEdit() {
   if (!chapterTitle.value.trim()) return
   saving.value = true
   try {
-    await editorStore.saveChapterEdit(idx, chapterTitle.value.trim(), editorStore.streamingChapterContent)
+    await editorStore.saveChapterEdit(idx, chapterTitle.value.trim(), getCurrentContent())
     editorStore.resetDirty()
+    await loadSyncStatus()
   } finally {
     saving.value = false
   }
@@ -310,8 +333,9 @@ async function saveNewChapter() {
   if (!chapterTitle.value.trim()) return
   saving.value = true
   try {
-    await editorStore.saveNewChapter(chapterTitle.value.trim(), editorStore.streamingChapterContent)
+    await editorStore.saveNewChapter(chapterTitle.value.trim(), getCurrentContent())
     editorStore.resetDirty()
+    await loadSyncStatus()
   } finally {
     saving.value = false
   }
@@ -328,6 +352,14 @@ async function saveFieldEdit() {
   }
 }
 
+async function onEditorSave() {
+  const field = editorStore.editingField
+  if (field === 'title') await saveTitle()
+  else if (field === 'chapter_new') await saveNewChapter()
+  else if (editorStore.isChapterField(field)) await saveChapterEdit()
+  else if (field) await saveFieldEdit()
+}
+
 function onUpdateHighlights(highlights: number[]) {
   const f = editorStore.editingField
   if (!f) return
@@ -340,6 +372,8 @@ function onUpdateHighlights(highlights: number[]) {
 
 async function doSaveCurrent(isAuto: boolean = false) {
   const field = editorStore.editingField
+  // continue_writing 已在后端落盘，避免自动保存重复新建章节
+  if (isAuto && field === 'chapter_new') return
   if (field === 'chapter_new') await saveNewChapter()
   else if (editorStore.isChapterField(field)) await saveChapterEdit()
   else if (field === 'title') await saveTitle()
@@ -358,13 +392,15 @@ async function onGenField(field: string) {
   editorStore.editingField = field
   editorStore.mdPreviewMode = false
   onFieldChanged()
-  chatStore.addUserMessage('更新大纲')
+  const message =
+    field === 'outline_future_md_content' ? '生成未来大纲' : `生成${FIELD_TITLES[field as keyof typeof FIELD_TITLES] || field}`
+  chatStore.addUserMessage(message)
   chatStore.streamingContent = ''
   chatStore.reasoningContent = ''
   chatStore.showThinking = false
   chatStore.thinkingCollapsed = false
   editorStore.startGeneration()
-  const stream = api.chatStream('更新大纲', editorStore.fieldValues, editorStore.abortController?.signal)
+  const stream = api.chatStream(message, editorStore.fieldValues, editorStore.abortController?.signal)
   await consumeStream(stream, {
     chatStore, editorStore, handleEvent,
     onSuccess: _startGeneratedSaveTimer,
@@ -374,6 +410,9 @@ async function onGenField(field: string) {
 function getCurrentContent(): string {
   const field = editorStore.editingField
   if (!field) return ''
+  if (editorStore.isGenerating && field === editorStore.generatingTarget) {
+    return editorStore.generatingStreamContent
+  }
   if (field === 'chapter_new' || editorStore.isChapterField(field)) return editorStore.streamingChapterContent
   if (field === 'title') return titleValue.value
   return editorStore.streamingFieldContent
@@ -382,9 +421,17 @@ function getCurrentContent(): string {
 function setCurrentContent(value: string) {
   const field = editorStore.editingField
   if (!field) return
-  if (field === 'chapter_new' || editorStore.isChapterField(field)) editorStore.streamingChapterContent = value
-  else if (field === 'title') titleValue.value = value
-  else editorStore.streamingFieldContent = value
+  if (editorStore.isGenerating && field === editorStore.generatingTarget) {
+    editorStore.generatingStreamContent = value
+    return
+  }
+  if (field === 'chapter_new' || editorStore.isChapterField(field)) {
+    editorStore.streamingChapterContent = value
+  } else if (field === 'title') {
+    titleValue.value = value
+  } else {
+    editorStore.streamingFieldContent = value
+  }
 }
 
 function getCurrentTitle(): string {
@@ -473,12 +520,9 @@ const handleEvent = createSseHandler(chatStore, editorStore, {
   collapseThinkingOnToken: false,
   onError: (evt) => { chatStore.addAgentMessage('出错了：' + (evt.error || '未知错误')) },
   onChapterTitle: (title) => { chapterTitle.value = title },
-  onGenerateStart: () => { isStreamingToField.value = true },
   onGenerateDone: () => {
-    isStreamingToField.value = false
     editorStore.pushContentSnapshot('生成后', getCurrentContent(), getCurrentTitle())
   },
-  onGenerateReset: () => { isStreamingToField.value = false },
   onInterrupt: (evt) => handleInterrupt(evt),
 })
 
@@ -494,6 +538,7 @@ async function handleInterrupt(evt: SseEvent) {
 
   editorStore.startGeneration()
   chatStore.streamingContent = ''
+  chatStore.streamingActivity = []
   chatStore.reasoningContent = ''
   chatStore.showThinking = false
   chatStore.thinkingCollapsed = false
@@ -509,7 +554,8 @@ async function handleInterrupt(evt: SseEvent) {
 onMounted(async () => {
   try {
     await editorStore.fetchState()
-    if (editorStore.currentState?.has_outline) { editorStore.editingField = 'outline_historical_md_content'; onFieldChanged() }
+    await loadSyncStatus()
+    if (editorStore.currentState?.has_outline) { editorStore.editingField = 'outline_future_md_content'; onFieldChanged() }
     await chatStore.loadHistory()
     startAutoSave()
   } catch (e) { console.error('初始化失败:', e) }
@@ -553,16 +599,28 @@ watch([chapterTitle, () => editorStore.streamingChapterContent, () => editorStor
   if (editorStore.editingField && !editorStore.isGenerating) editorStore.markDirty()
 })
 
+watch(
+  () => [editorStore.editingField, editorStore.pendingChapterTitle] as const,
+  ([field, pending]) => {
+    if (field === 'chapter_new' && pending) {
+      chapterTitle.value = pending
+    }
+  },
+)
+
 watch(() => editorStore.editingField, (field, oldField) => {
-  if (field && field !== oldField && !editorStore.isGenerating) {
+  if (!field || field === oldField) return
+  if (!editorStore.isGenerating || editorStore.viewPinned) {
     onFieldChanged()
+  } else if (field === 'chapter_new') {
+    chapterTitle.value = editorStore.pendingChapterTitle || chapterTitle.value
   }
 })
 
 watch(() => ({ ...editorStore.fieldValues }), () => {
   if (!editorStore.isGenerating) return
   const f = editorStore.editingField
-  if (!f) return
+  if (!f || f === editorStore.generatingTarget) return
   if (editorStore.isChapterField(f) || f === 'chapter_new') {
     editorStore.streamingChapterContent = editorStore.fieldValues[f] || editorStore.streamingChapterContent
   } else if (f === 'title') {
@@ -583,7 +641,7 @@ watch(() => editorStore.sidebarVisible, (visible) => {
 </script>
 
 <style scoped>
-.editor-layout { height: 100dvh; display: grid; grid-template-rows: var(--header-h) 1fr; overflow: hidden; }
+.editor-layout { height: 100dvh; display: grid; grid-template-rows: var(--header-h) auto 1fr; overflow: hidden; }
 
 .header {
   background: var(--bg-surface);
@@ -627,6 +685,86 @@ watch(() => editorStore.sidebarVisible, (visible) => {
 .btn:active { transform: scale(0.97); }
 .btn-ghost { border-color: transparent; }
 .btn-ghost:hover { background: var(--bg-hover); }
+
+.btn-sync {
+  position: relative;
+  border-color: var(--border);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+}
+
+.btn-sync:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.btn-sync:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-sync.has-pending:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sync-badge {
+  margin-left: 6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-on);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 18px;
+  background: var(--accent-dim);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.sync-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.btn-sync-inline {
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--accent);
+  color: var(--accent-on);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sync-log {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
 
 .sidebar-toggle {
   width: 34px; height: 34px;
@@ -766,55 +904,4 @@ watch(() => editorStore.sidebarVisible, (visible) => {
 }
 
 .modal .modal-btn-ghost:hover { background: var(--bg-hover); border-color: var(--border-strong); }
-
-.import-dropzone {
-  border: 2px dashed var(--border); border-radius: var(--radius-md);
-  padding: 36px 24px; text-align: center; cursor: pointer;
-  transition: all var(--spring-medium); margin-bottom: 20px;
-}
-
-.import-dropzone:hover, .import-dropzone.active { border-color: var(--accent); background: var(--accent-dim); }
-.import-dropzone-icon { color: var(--text-muted); margin-bottom: 10px; opacity: 0.5; }
-.import-dropzone p { font-size: 13px; color: var(--text-muted); margin: 0; }
-.import-file-name { color: var(--accent) !important; font-weight: 500; }
-
-.import-preview {
-  margin-bottom: 18px; padding: 14px 16px;
-  background: var(--bg-input); border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-}
-
-.import-preview-title {
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  margin-bottom: 8px;
-}
-
-.import-preview-item {
-  font-size: 12px; color: var(--text-muted); padding: 3px 0;
-  font-family: 'Noto Serif SC', serif;
-}
-
-.import-preview-more {
-  font-size: 11px; color: var(--text-faint); padding: 4px 0;
-}
-
-.import-progress {
-  margin-bottom: 18px; padding: 14px 16px;
-  background: var(--bg-input); border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-}
-
-.import-progress-bar {
-  height: 4px; background: var(--border); border-radius: 2px;
-  overflow: hidden; margin-bottom: 8px;
-}
-
-.import-progress-fill {
-  height: 100%; background: var(--accent); border-radius: 2px;
-  transition: width var(--spring-medium);
-}
-
-.import-progress-text {
-  font-size: 11.5px; color: var(--text-muted); margin: 0;
-}
 </style>

@@ -47,7 +47,6 @@ class TestInitializeProjectFiles:
         assert (base / "characters.md").exists()
         assert (base / "relationships.md").exists()
         assert (base / "foreshadowing.md").exists()
-        assert (base / "outline_historical.md").exists()
         assert (base / "outline_future.md").exists()
         assert (base / "meta.json").exists()
         assert (base / "MEMORY.md").exists()

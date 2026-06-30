@@ -42,9 +42,10 @@ describe('SideBar', () => {
     })
 
     expect(wrapper.text()).toContain('测试小说')
-    expect(wrapper.text()).toContain('历史大纲')
+    expect(wrapper.text()).toContain('未来大纲')
     expect(wrapper.text()).toContain('写作设定')
     expect(wrapper.text()).toContain('角色档案')
+    expect(wrapper.text()).toContain('地点档案')
   })
 
   it('emits fieldChanged when clicking a field', async () => {
@@ -66,28 +67,6 @@ describe('SideBar', () => {
     if (items.length > 0) {
       await items[0].trigger('click')
       expect(wrapper.emitted('fieldChanged')).toBeTruthy()
-    }
-  })
-
-  it('emits showImport when import button clicked', async () => {
-    const store = useEditorStore()
-    store.currentState = {
-      current_book_name: '测试',
-      has_outline: true,
-      meta: { title: '测试小说', total_chapters: 0 },
-      outline: { title: '测试小说', chapters: [] },
-      chapters: [],
-      messages: [],
-    }
-
-    const wrapper = mount(SideBar, {
-      global: { stubs: { teleport: true } },
-    })
-
-    const importBtn = wrapper.find('.sb-ch-import-btn')
-    if (importBtn.exists()) {
-      await importBtn.trigger('click')
-      expect(wrapper.emitted('showImport')).toBeTruthy()
     }
   })
 

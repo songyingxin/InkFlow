@@ -141,14 +141,15 @@ class TestEvaluateCompletion:
 
     @pytest.mark.asyncio
     @patch("novel_agent.agent.runtime.evaluator.llm_chat", new_callable=AsyncMock, side_effect=Exception("LLM error"))
-    async def test_llm_exception_returns_true(self, mock_llm):
+    async def test_llm_exception_returns_false(self, mock_llm):
         result = await evaluate_completion(
             "梳理设定",
             ["read_novel_content", "task_complete"],
             ["读取完成"],
             agent_name="reader",
         )
-        assert result["completed"] is True
+        assert result["completed"] is False
+        assert "评估器异常" in result["reason"]
 
     @pytest.mark.asyncio
     async def test_empty_request_returns_true(self):

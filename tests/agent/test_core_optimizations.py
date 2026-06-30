@@ -165,7 +165,6 @@ class TestChapterContextBudget:
 
         state = MagicMock()
         state.settings_md_content = "设定"
-        state.outline_historical_md_content = "历史大纲"
         state.outline_future_md_content = "未来大纲"
         state.characters_md_content = "人物"
         state.relationships_md_content = "关系图谱"
@@ -174,7 +173,9 @@ class TestChapterContextBudget:
 
         long_content = "这是一段很长的章节内容。" * 5000
 
-        with patch("novel_agent.agent.generation.chapter.load_chapter_text", side_effect=lambda s, i: long_content if 1 <= i <= 5 else ""):
+        with patch("novel_agent.agent.memory.novel.NovelMemory.ensure_all_fields_loaded"), \
+             patch("novel_agent.agent.memory.novel.NovelMemory.assemble_historical_outline", return_value="更早章节摘要"), \
+             patch("novel_agent.agent.generation.chapter.load_chapter_text", side_effect=lambda s, i: long_content if 1 <= i <= 5 else ""):
             ctx = _build_chapter_context(state, idx=6, max_recent_chars=500)
             assert len(ctx["recent_chapters"]) <= 600
             assert "[...已截断...]" in ctx["recent_chapters"]
@@ -184,7 +185,6 @@ class TestChapterContextBudget:
 
         state = MagicMock()
         state.settings_md_content = "设定"
-        state.outline_historical_md_content = "历史大纲"
         state.outline_future_md_content = "未来大纲"
         state.characters_md_content = "人物"
         state.relationships_md_content = "关系图谱"
@@ -193,7 +193,9 @@ class TestChapterContextBudget:
 
         short_content = "短章节内容"
 
-        with patch("novel_agent.agent.generation.chapter.load_chapter_text", side_effect=lambda s, i: short_content if 1 <= i <= 2 else ""):
+        with patch("novel_agent.agent.memory.novel.NovelMemory.ensure_all_fields_loaded"), \
+             patch("novel_agent.agent.memory.novel.NovelMemory.assemble_historical_outline", return_value="更早章节摘要"), \
+             patch("novel_agent.agent.generation.chapter.load_chapter_text", side_effect=lambda s, i: short_content if 1 <= i <= 2 else ""):
             ctx = _build_chapter_context(state, idx=3, max_recent_chars=12000)
             assert "[...已截断...]" not in ctx["recent_chapters"]
 

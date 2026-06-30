@@ -31,7 +31,7 @@ InkFlow 为这些挑战设计了专门的解决方案。
 |-------|---------|------|--------|
 | **Reader** | 理解 | 阅读小说内容、回答问题、检查一致性 | `read_novel_content`, `task_complete` |
 | **Creator** | 创建 | 从零生成章节、大纲、设定、世界观、角色、伏笔 | `continue_writing`, `regenerate_chapter`, `generate_*` ×7, `read_novel_content`, `task_complete` |
-| **Editor** | 修改 | 局部修改设定、增量更新大纲 | `update_field`, `update_outline` ×3, `read_novel_content`, `task_complete` |
+| **Editor** | 修改 | 局部修改设定、增量更新大纲 | `update_field`, `update_outline`, `update_chapter_summaries`, `read_novel_content`, `task_complete` |
 
 Lead Agent 通过单次 LLM 调用同时完成意图识别和路由决策——简单请求 1 次调用即可响应，比"先规划再执行"节省约 50% 首 token 延迟。
 
@@ -127,9 +127,9 @@ CJK 字符按 1.5 token、ASCII 按 0.25 token 估算——中文场景比简单
 │  └──────────────────────────────────────────────────────┘   │
 ├──────────────────────────────────────────────────────────────┤
 │                      Memory System                            │
-│  config  outline_future  outline_historical  characters      │
-│  foreshadowing  worldbuilding  MEMORY  memory/*  chat.jsonl  │
-│  chapters/*  summaries.jsonl                                 │
+│  settings  characters  relationships  foreshadowing           │
+│  outline_future  outline_structure  chapters/*  meta.json     │
+│  chat.db  short_memory.md  MEMORY.md  memory_index.db         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -141,7 +141,7 @@ CJK 字符按 1.5 token、ASCII 按 0.25 token 估算——中文场景比简单
 | **Agent 架构** | Supervisor 多 Agent（Lead + 3 Subagent） | 单 Agent + SOUL.md | 单 Agent + 技能系统 |
 | **任务编排** | Plan-Execute + Harness 合并优化 | 心跳守护 + 触发式 | Agent Loop + cron |
 | **多 Agent 协作** | 一级 Subagent，认知模式分工，压缩摘要返回 | Handoff 配置 + 多 Agent 独立部署 | 并行子 Agent，隔离上下文 |
-| **记忆系统** | 7 文件持久状态 + 每日蒸馏 + 三级流转 | SQLite + MEMORY.md + 上下文压缩 | 三层：会话 + SQLite FTS5 + 行为模型 |
+| **记忆系统** | 5 字段持久状态 + outline_structure 章节摘要 + 对话记忆 + FTS 检索 | SQLite + MEMORY.md + 上下文压缩 | 三层：会话 + SQLite FTS5 + 行为模型 |
 | **记忆蒸馏** | ✅ LLM 六分类 + 自动追加各字段 | ❌ | ✅ 技能自动创建 |
 | **上下文压缩** | 两级（截断→LLM 摘要）+ CJK 感知 | 配置化 auto-compact | 内置自动压缩 |
 | **任务评估** | 规则引擎 90% + LLM 10% | 无内置 | 无内置 |
@@ -203,14 +203,13 @@ Schema 驱动的工具注册机制——Schema 定义与 Handler 实现分离：
 |------|------|------|
 | 章节 | `continue_writing` | 续写新章 |
 | 章节 | `regenerate_chapter` | 重写指定章 |
-| 生成 | `generate_outline` / `_historical` / `_future` | 从零构建大纲 |
-| 生成 | `generate_config` | 重构写作设定 |
-| 生成 | `generate_worldbuilding` | 重构世界观 |
-| 生成 | `generate_characters` | 重构角色体系 |
-| 生成 | `generate_foreshadowing` | 重构伏笔清单 |
+| 生成 | `generate_outline` | 全量生成/重生成未来章节细纲 |
+| 生成 | `generate_settings` / `generate_characters` / `generate_relationships` / `generate_foreshadowing` | 重构各记忆字段 |
 | 修改 | `update_field` | patches 直接替换 / LLM diff |
-| 修改 | `update_outline` / `_historical` / `_future` | 增量更新大纲 |
+| 修改 | `update_outline` | 增量同步未来章节细纲 |
+| 修改 | `update_chapter_summaries` | 同步章节摘要到 outline_structure |
 | 读取 | `read_novel_content` | 搜索上下文回答提问 |
+| 扫描 | `scan_foreshadowing` | 从章节发现新伏笔 |
 | 控制 | `task_complete` | 显式标记任务完成 |
 
 **错误分类增强**：`retryable`（超时/429/503）附带增强提示帮助 Agent 一次重试成功；`unrecoverable`（缺参数/不支持字段）直接返回失败。
@@ -233,15 +232,15 @@ novel_agent/
 │   │   ├── chapter.py / generate.py / read.py / update.py / control.py
 │   │   └── registry.py            # ToolRegistry
 │   ├── generation/
-│   │   ├── base.py                # 章节生成 + 标题剥离 + 增量字段生成
-│   │   └── fields.py              # FieldRegistry（6 字段统一配置映射）
+│   │   ├── base.py                # 增量字段生成 + 未来大纲流
+│   │   ├── chapter.py             # 章节正文/标题/摘要生成
+│   │   └── fields.py              # FieldRegistry 字段生成映射
 │   ├── memory/
-│   │   ├── manager.py             # MemoryManager — 文件 CRUD
-│   │   ├── context.py             # 上下文构建 + 状态同步
-│   │   ├── persistence.py         # 文件 IO + 备份 + JSONL 追加
-│   │   ├── daily.py               # 每日日志 + 跨天压缩
-│   │   ├── chapters.py / chat.py  # 章节 / 对话文件管理
-│   │   └── update.py              # 记忆蒸馏（LLM 分类 → 追加各字段）
+│   │   ├── manager.py             # 记忆搜索入口
+│   │   ├── search.py              # FTS5 全文检索
+│   │   ├── update.py              # 记忆蒸馏
+│   │   ├── novel/novel.py         # 小说文件 CRUD + outline_structure
+│   │   └── conversation/          # chat.db / short_memory / MEMORY
 │   ├── runtime/
 │   │   ├── llm.py                 # 三种调用模式 + 指数退避重试
 │   │   ├── compression.py         # 两级压缩 + CJK 感知 token 估算

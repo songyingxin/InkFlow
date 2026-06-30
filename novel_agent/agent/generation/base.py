@@ -9,7 +9,7 @@
 6. 未来大纲生成：基于已有信息规划未来章节
 7. 状态摘要构建：汇总小说状态供 API 层使用
 增量更新机制（核心设计）：
-  每个字段在 meta.json 中维护一个 read_ch 字段（如 outline_historical_read_ch），
+  每个字段在 meta.json 中维护一个 read_ch 字段（如 outline_future_read_ch），
   记录该字段已读到的章号。当有新章节产生时，只需读取未读章节进行增量更新，
   而非每次都重读所有章节。如果用户选择"重读全部"，则 reread_all=True，
   会重新读取所有章节。
@@ -96,8 +96,6 @@ async def iterative_generate_stream(
     if read_ch_field is not None:
         new_chapter_indices = get_unread_chapter_indices(state, read_ch_field)
     current = existing if existing else "暂无"
-    if template_name == "outline_historical":
-        current = _clean_outline_titles(current)
 
     request_text = (
         user_request
@@ -192,7 +190,7 @@ async def future_outline_stream(
         relationships=relationships or "暂无关系",
         foreshadowing=foreshadowing or "暂无伏笔清单",
     )
-    request_text = user_request if user_request else "请根据以上信息规划未来章节大纲"
+    request_text = user_request if user_request else "请根据以上信息撰写未写章节的细纲"
     async for token in llm_chat_stream(
         PromptBuilder.build_generation_messages(state, system_msg, request_text)
     ):
@@ -210,7 +208,7 @@ def build_state_summary(state: NovelState) -> dict:
                 {
                     "idx": ch.idx,
                     "title": ch.title,
-                    "content_summary": ch.content_summary,
+                    "content_summary": ch.content_summary or "",
                     "is_written": ch.is_written,
                 }
             )
@@ -219,14 +217,15 @@ def build_state_summary(state: NovelState) -> dict:
         "has_outline": state.outline is not None,
         "outline": {"title": state.outline.title} if state.outline else None,
         "chapters": chapters,
+        "deleted_chapters": NovelMemory.get_deleted_chapter_indices(state),
         "meta": {
             "title": state.meta.title,
             "total_chapters": state.meta.total_chapters,
         },
         "settings_md_content": state.settings_md_content or "",
-        "outline_historical_md_content": state.outline_historical_md_content or "",
         "outline_future_md_content": state.outline_future_md_content or "",
         "characters_md_content": state.characters_md_content or "",
+        "locations_md_content": state.locations_md_content or "",
         "relationships_md_content": state.relationships_md_content or "",
         "foreshadowing_md_content": state.foreshadowing_md_content or "",
     }

@@ -96,17 +96,20 @@ async def handle_scan_foreshadowing(state, chapter_num: int) -> str:
     w(
         {
             "type": "token",
-            "token": f"🔍 正在扫描第{chapter_num}章「{title}」的伏笔变化...\n",
+        "token": f"\n---\n### 🔍 伏笔扫描 · 第 {chapter_num} 章\n\n**{title}**\n\n",
         }
     )
     scan_result = await _scan_chapter_foreshadowing(
         novel_state, chapter_num, chapter_content
     )
     if not _has_changes(scan_result):
-        w({"type": "token", "token": "✅ 未检测到伏笔变化\n"})
+        w({"type": "token", "token": "\n### ✅ 未检测到伏笔变化\n\n"})
         return f"第{chapter_num}章未检测到伏笔变化"
 
-    w({"type": "token", "token": f"📋 检测到伏笔变化：\n{scan_result}\n"})
+    w({"type": "token", "token": (
+        f"\n### 📋 检测到伏笔变化\n\n"
+        f"```\n{scan_result[:2000]}\n```\n\n"
+    )})
     NovelMemory.ensure_field_loaded(novel_state, "foreshadowing_md_content")
     foreshadowing = novel_state.foreshadowing_md_content or ""
     patches = _extract_new_foreshadowing_patches(scan_result, foreshadowing)
@@ -119,13 +122,13 @@ async def handle_scan_foreshadowing(state, chapter_num: int) -> str:
             NovelMemory.save_field_content(novel_state, 
                 "foreshadowing_md_content", updated, update_read_ch=False
             )
-            w({"type": "token", "token": "✅ 伏笔清单已自动更新\n"})
+            w({"type": "token", "token": "\n### ✅ 伏笔已更新\n\n"})
             return f"第{chapter_num}章伏笔扫描完成，伏笔清单已更新"
 
     w(
         {
             "type": "token",
-            "token": "⚠️ 检测到伏笔变化但无法自动更新，请手动使用 update_field 更新伏笔清单\n",
+        "token": "\n### ⚠️ 伏笔变化无法自动应用\n\n> 请手动使用 `update_field` 更新伏笔清单\n\n",
         }
     )
     return f"第{chapter_num}章检测到伏笔变化，但自动更新失败，请手动更新。变化详情：\n{scan_result}"

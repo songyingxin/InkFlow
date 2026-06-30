@@ -45,7 +45,7 @@ class TestFieldRegistry:
 
     def test_label(self):
         assert FieldRegistry.label("characters_md_content") == "角色档案"
-        assert FieldRegistry.label("outline_historical_md_content") == "历史大纲"
+        assert FieldRegistry.label("outline_future_md_content") == "未来章节细纲"
 
     def test_template_name(self):
         assert FieldRegistry.template_name("settings_md_content") == "settings"
@@ -66,7 +66,7 @@ class TestFieldRegistry:
 
     def test_short_name(self):
         assert FieldRegistry.short_name("settings_md_content") == "settings"
-        assert FieldRegistry.short_name("outline_historical_md_content") == "outline_historical"
+        assert FieldRegistry.short_name("outline_future_md_content") == "outline_future"
 
     def test_full_name(self):
         assert FieldRegistry.full_name("settings") == "settings_md_content"
@@ -93,6 +93,7 @@ class TestFieldRegistry:
         assert "generate_settings" in gen
         assert "generate_characters" in gen
         assert "generate_outline_historical" not in gen
+        assert "generate_locations" in gen
         assert "generate_outline_future" not in gen
 
     def test_short_name_map(self):
@@ -112,6 +113,7 @@ class TestFieldRegistry:
     def test_cascade_fields(self):
         cascaded = FieldRegistry.cascade_fields("settings_md_content")
         assert "characters_md_content" in cascaded
+        assert "locations_md_content" in cascaded
         assert "outline_future_md_content" in cascaded
 
     def test_cascade_fields_leaf(self):
@@ -121,7 +123,7 @@ class TestFieldRegistry:
     def test_cascade_labels(self):
         labels = FieldRegistry.cascade_labels("settings_md_content")
         assert "角色档案" in labels
-        assert "未来大纲" in labels
+        assert "未来章节细纲" in labels
 
     def test_persistence_defs(self):
         defs = FieldRegistry.persistence_defs()
@@ -190,7 +192,6 @@ class TestNovelState:
         state = NovelState()
         assert state.settings_md_content == ""
         assert state.characters_md_content == ""
-        assert state.outline_historical_md_content == ""
         assert state.outline_future_md_content == ""
         assert state.relationships_md_content == ""
         assert state.foreshadowing_md_content == ""
@@ -253,3 +254,4 @@ class TestMemoryFiles:
         assert mf.meta_path == Path("/tmp/test/meta.json")
         assert mf.memory_md_path == Path("/tmp/test/MEMORY.md")
         assert mf.chat_db_path == Path("/tmp/test/chat.db")
+        assert mf.outline_structure_path == Path("/tmp/test/outline_structure.json")

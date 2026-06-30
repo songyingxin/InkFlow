@@ -15,7 +15,7 @@ from ..agent.memory.conversation import ConversationMemory
 from ..service.app_state import AppState
 from ..agent.generation.base import build_state_summary
 from ..config import WORKSPACE_DIR
-from .routes import books, chapters, fields, chat
+from .routes import books, chapters, fields, chat, maintenance
 
 app = FastAPI(
     title="网文 Agent", description="基于 LLM 的网文写作助手", version="0.6.0"
@@ -25,6 +25,7 @@ app.include_router(books.router)
 app.include_router(chapters.router)
 app.include_router(fields.router)
 app.include_router(chat.router)
+app.include_router(maintenance.router)
 
 
 @app.get("/api/state")

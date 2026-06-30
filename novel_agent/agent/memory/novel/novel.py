@@ -3,7 +3,8 @@
 管理小说创作的结构化知识，对齐设计文档 §3。
 
 职责：
-- 6 个字段文件：settings / characters / relationships / foreshadowing / outline_historical / outline_future
+- 6 个字段文件：settings / characters / locations / relationships / foreshadowing / outline_future
+- 章节索引与摘要：outline_structure.json（content_summary 字段）
 - 章节全文：chapters/NNN.md
 - 章节索引：outline_structure.json
 - 元信息：meta.json
@@ -21,14 +22,16 @@ import shutil
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from ....core.models import NovelState, MetaInfo
+from ....core.models import NovelState, MetaInfo, ChapterOutline
 from ....core.field_registry import FieldRegistry
 
 _MAX_BACKUP_DAYS = 10
+_SNAPSHOT_INTERVAL_SECONDS = 1800
 _LAST_CLEANUP_KEY = "_backup_last_cleanup_date"
 
 
 class NovelMemory:
+    _backup_timestamps: dict[str, float] = {}
     """
     小说记忆系统（全部 staticmethod）
     封装小说创作的结构化知识管理：字段文件、章节全文、章节索引、元信息。
@@ -67,6 +70,12 @@ class NovelMemory:
     @staticmethod
     def _do_backup(backup_dir: Path, base_path: Path, path: Path, existing: str):
         now = datetime.now()
+        key = str(path)
+        last_ts = NovelMemory._backup_timestamps.get(key, 0)
+        if now.timestamp() - last_ts < _SNAPSHOT_INTERVAL_SECONDS:
+            return
+        NovelMemory._backup_timestamps[key] = now.timestamp()
+
         today = now.date().isoformat()
         ts = now.strftime("%H%M%S")
         rel_path = path.relative_to(base_path)
@@ -127,12 +136,12 @@ class NovelMemory:
 
     _load_settings_md = _make_load_fn.__func__("settings_path")
     _save_settings_md = _make_save_fn.__func__("settings_path")
-    _load_outline_historical_md = _make_load_fn.__func__("outline_historical_path")
-    _save_outline_historical_md = _make_save_fn.__func__("outline_historical_path")
     _load_outline_future_md = _make_load_fn.__func__("outline_future_path")
     _save_outline_future_md = _make_save_fn.__func__("outline_future_path")
     _load_characters_md = _make_load_fn.__func__("characters_path")
     _save_characters_md = _make_save_fn.__func__("characters_path")
+    _load_locations_md = _make_load_fn.__func__("locations_path")
+    _save_locations_md = _make_save_fn.__func__("locations_path")
     _load_relationships_md = _make_load_fn.__func__("relationships_path")
     _save_relationships_md = _make_save_fn.__func__("relationships_path")
     _load_foreshadowing_md = _make_load_fn.__func__("foreshadowing_path")
@@ -148,17 +157,6 @@ class NovelMemory:
     def save_settings_md(state: NovelState, content: str):
         NovelMemory._save_text_file(
             state.memory_files.settings_path, content,
-            backup_dir=state.memory_files.backups_dir, base_path=state.memory_files.base_path,
-        )
-
-    @staticmethod
-    def load_outline_historical_md(state: NovelState) -> str:
-        return NovelMemory._load_text_file(state.memory_files.outline_historical_path)
-
-    @staticmethod
-    def save_outline_historical_md(state: NovelState, content: str):
-        NovelMemory._save_text_file(
-            state.memory_files.outline_historical_path, content,
             backup_dir=state.memory_files.backups_dir, base_path=state.memory_files.base_path,
         )
 
@@ -181,6 +179,17 @@ class NovelMemory:
     def save_characters_md(state: NovelState, content: str):
         NovelMemory._save_text_file(
             state.memory_files.characters_path, content,
+            backup_dir=state.memory_files.backups_dir, base_path=state.memory_files.base_path,
+        )
+
+    @staticmethod
+    def load_locations_md(state: NovelState) -> str:
+        return NovelMemory._load_text_file(state.memory_files.locations_path)
+
+    @staticmethod
+    def save_locations_md(state: NovelState, content: str):
+        NovelMemory._save_text_file(
+            state.memory_files.locations_path, content,
             backup_dir=state.memory_files.backups_dir, base_path=state.memory_files.base_path,
         )
 
@@ -345,6 +354,91 @@ class NovelMemory:
     def load_chapter(state: NovelState, chapter_idx: int) -> str:
         return NovelMemory._load_text_file(state.memory_files.chapters_dir / f"{chapter_idx:03d}.md")
 
+    @staticmethod
+    def assemble_historical_outline(
+        state: NovelState,
+        *,
+        before_idx: int | None = None,
+        exclude_recent: int = 0,
+        written_only: bool = True,
+    ) -> str:
+        """将 outline_structure 中各章 content_summary 拼成历史大纲文本。"""
+        if not state.outline or not state.outline.chapters:
+            return "暂无历史大纲"
+        recent_cutoff = (before_idx - exclude_recent + 1) if before_idx and exclude_recent else None
+        parts = []
+        for ch in sorted(state.outline.chapters, key=lambda c: c.idx or 0):
+            if ch.idx is None:
+                continue
+            if written_only and not ch.is_written:
+                continue
+            if before_idx and ch.idx >= before_idx:
+                continue
+            if recent_cutoff and ch.idx >= recent_cutoff:
+                continue
+            summary = (ch.content_summary or "").strip()
+            if not summary:
+                continue
+            title = ch.title or ""
+            header = f"第{ch.idx}章"
+            if title:
+                header += f" {title}"
+            parts.append(f"{header}：{summary}")
+        return "\n".join(parts) if parts else "暂无历史大纲"
+
+    @staticmethod
+    def is_placeholder_summary(summary: str, content: str, *, max_len: int | None = None) -> bool:
+        """判断 content_summary 是否为正文截断占位（非 LLM 摘要）。"""
+        from ....config import tc
+
+        summary = (summary or "").strip()
+        content = (content or "").strip()
+        if not summary or not content:
+            return False
+        limit = max_len or tc.chapter_content_summary_chars
+        if len(summary) < int(limit * 0.85):
+            return False
+        return content.startswith(summary)
+
+    @staticmethod
+    def get_chapters_missing_summary(state: NovelState) -> list[int]:
+        if not state.outline:
+            return []
+        missing = []
+        for ch in state.outline.chapters:
+            if ch.idx is None or not ch.is_written:
+                continue
+            summary = (ch.content_summary or "").strip()
+            content = NovelMemory.load_chapter(state, ch.idx) or ""
+            if content:
+                current_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+                if ch.content_hash and ch.content_hash != current_hash:
+                    missing.append(ch.idx)
+                    continue
+            if not summary:
+                missing.append(ch.idx)
+                continue
+            if NovelMemory.is_placeholder_summary(summary, content):
+                missing.append(ch.idx)
+        return sorted(missing)
+
+    @staticmethod
+    def update_chapter_summary(state: NovelState, chapter_idx: int, summary: str):
+        ch = state.find_chapter_in_outline(chapter_idx)
+        if ch:
+            ch.content_summary = summary.strip()
+        else:
+            state.outline.chapters.append(
+                ChapterOutline(
+                    idx=chapter_idx,
+                    title=state.find_chapter_title(chapter_idx) or f"第{chapter_idx}章",
+                    content_summary=summary.strip(),
+                    is_written=True,
+                )
+            )
+            state.outline.chapters.sort(key=lambda c: c.idx or 0)
+        NovelMemory.save_outline_structure(state)
+
     # ── 章节索引 ─────────────────────────────────────────────────
 
     @staticmethod
@@ -390,6 +484,10 @@ class NovelMemory:
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
+                if "outline_historical_read_ch" in data:
+                    legacy = data.pop("outline_historical_read_ch")
+                    data.setdefault("outline_future_read_ch", legacy)
+                data.pop("chapter_summary_read_ch", None)
                 return MetaInfo(**data)
             except (json.JSONDecodeError, Exception):
                 pass
@@ -404,13 +502,146 @@ class NovelMemory:
             base_path=state.memory_files.base_path,
         )
 
+    # ── 章节备份与恢复 ────────────────────────────────────────────
+
+    @staticmethod
+    def list_chapter_backups(state: NovelState, chapter_idx: int) -> list[dict]:
+        backups_dir = state.memory_files.backups_dir
+        filename = f"{chapter_idx:03d}.md"
+        result = []
+        if not backups_dir.exists():
+            return result
+        for date_dir in sorted(backups_dir.iterdir(), reverse=True):
+            if not date_dir.is_dir():
+                continue
+            try:
+                date.fromisoformat(date_dir.name)
+            except ValueError:
+                continue
+            for bp_file in sorted(date_dir.iterdir(), reverse=True):
+                if not bp_file.name.endswith(f"_{filename}"):
+                    continue
+                ts = bp_file.name.split("_", 1)[0]
+                try:
+                    timestamp_str = f"{date_dir.name}T{ts[:2]}:{ts[2:4]}:{ts[4:6]}"
+                    dt = datetime.fromisoformat(timestamp_str)
+                except ValueError:
+                    continue
+                body = bp_file.read_text(encoding="utf-8")
+                result.append(
+                    {
+                        "timestamp": dt.isoformat(),
+                        "date": date_dir.name,
+                        "time": f"{ts[:2]}:{ts[2:4]}:{ts[4:6]}",
+                        "size": len(body),
+                        "preview": body[:200],
+                        "hash": hashlib.sha256(body.encode()).hexdigest()[:16],
+                    }
+                )
+        return result
+
+    @staticmethod
+    def preview_chapter_backup(
+        state: NovelState, chapter_idx: int, timestamp: str
+    ) -> dict | None:
+        filename = f"{chapter_idx:03d}.md"
+        try:
+            dt = datetime.fromisoformat(timestamp)
+        except ValueError:
+            return None
+        date_dir = dt.strftime("%Y-%m-%d")
+        ts = dt.strftime("%H%M%S")
+        backup_path = state.memory_files.backups_dir / date_dir / f"{ts}_{filename}"
+        if not backup_path.exists():
+            return None
+        body = backup_path.read_text(encoding="utf-8")
+        max_preview = 5000
+        return {
+            "chapter_idx": chapter_idx,
+            "timestamp": timestamp,
+            "content": body[:max_preview],
+            "size": len(body),
+            "is_full": len(body) <= max_preview,
+        }
+
+    @staticmethod
+    def restore_chapter_backup(
+        state: NovelState, chapter_idx: int, timestamp: str
+    ) -> str | None:
+        filename = f"{chapter_idx:03d}.md"
+        try:
+            dt = datetime.fromisoformat(timestamp)
+        except ValueError:
+            return None
+        date_dir = dt.strftime("%Y-%m-%d")
+        ts = dt.strftime("%H%M%S")
+        backup_path = state.memory_files.backups_dir / date_dir / f"{ts}_{filename}"
+        if not backup_path.exists():
+            return None
+        body = backup_path.read_text(encoding="utf-8")
+        NovelMemory.save_chapter(state, chapter_idx, body)
+        ch = state.find_chapter_in_outline(chapter_idx)
+        if ch:
+            ch.content_summary = ""
+            ch.content_hash = hashlib.sha256(body.encode()).hexdigest()[:16]
+            ch.word_count = len(body)
+            ch.is_written = True
+            NovelMemory.save_outline_structure(state)
+        else:
+            state.outline.chapters.append(
+                ChapterOutline(
+                    title=state.find_chapter_title(chapter_idx) or f"第{chapter_idx}章",
+                    content_summary="",
+                    is_written=True,
+                    idx=chapter_idx,
+                    word_count=len(body),
+                    content_hash=hashlib.sha256(body.encode()).hexdigest()[:16],
+                    status="draft",
+                )
+            )
+            state.outline.chapters.sort(key=lambda c: c.idx or 0)
+            state.meta.total_chapters = len(state.outline.chapters)
+            NovelMemory.save_outline_structure(state)
+            NovelMemory.save_meta(state, state.meta)
+        return f"第{chapter_idx}章已恢复到 {timestamp} 的版本，共{len(body)}字"
+
+    @staticmethod
+    def get_deleted_chapter_indices(state: NovelState) -> list[int]:
+        backups_dir = state.memory_files.backups_dir
+        if not backups_dir.exists():
+            return []
+        existing_indices = {
+            ch.idx
+            for ch in (state.outline.chapters if state.outline else [])
+            if ch.idx is not None
+        }
+        found = set()
+        for date_dir in backups_dir.iterdir():
+            if not date_dir.is_dir():
+                continue
+            try:
+                date.fromisoformat(date_dir.name)
+            except ValueError:
+                continue
+            for bp_file in date_dir.iterdir():
+                parts = bp_file.name.split("_", 1)
+                if len(parts) < 2:
+                    continue
+                stem = parts[1].rsplit(".", 1)[0]
+                try:
+                    idx = int(stem)
+                except ValueError:
+                    continue
+                if 1 <= idx <= 9999 and idx not in existing_indices:
+                    found.add(idx)
+        return sorted(found)
+
     # ── 初始化 ────────────────────────────────────────────────────
 
     @staticmethod
     def initialize_project_files(state: NovelState, title: str):
         state.memory_files.base_path.mkdir(parents=True, exist_ok=True)
         NovelMemory.save_settings_md(state, f"# {title} - 设定\n\n## 风格定位\n\n## 核心冲突\n\n## 世界观\n\n## 力量体系\n\n## 卷级规划\n\n")
-        NovelMemory.save_outline_historical_md(state, f"# {title} - 历史大纲\n\n## 卷级结构\n\n## 已完成章节大纲\n\n")
         NovelMemory.save_outline_future_md(state, f"# {title} - 未来大纲\n\n## 未来章节大纲\n\n")
         NovelMemory.save_characters_md(state, f"# {title} - 角色档案\n\n## 核心角色\n\n## 活跃配角\n\n## 已退场角色\n\n")
         NovelMemory.save_relationships_md(state, f"# {title} - 关系图谱\n\n## 人物关系\n\n## 势力关系\n\n")

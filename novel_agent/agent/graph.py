@@ -47,7 +47,7 @@ from .runtime import MessageCompressor
 from .runtime import evaluate_completion
 from .memory.conversation import ConversationMemory
 from .memory import memory_update_node
-from .tools.classification import WRITE_TOOLS, PRODUCTION_TOOLS, EDITOR_WRITE_TOOLS
+from .tools.classification import WRITE_TOOLS, PRODUCTION_TOOLS, EDITOR_WRITE_TOOLS, CHAPTER_TOOLS
 from ..core.models import NovelState
 from ..config import tc
 from .tools import TOOLS
@@ -332,7 +332,7 @@ class AgentLoop:
             w(
                 {
                     "type": "token",
-                    "token": f"\n⚠️ {result.agent_name} 执行失败：{result.error}\n",
+                    "token": f"\n### ⚠️ {result.agent_name} 执行失败\n\n**原因：**{result.error}\n",
                 }
             )
         return state
@@ -397,15 +397,20 @@ class AgentLoop:
                 f"⚠️ 这是 `{result.agent_name}` 连续第2次失败，请换一个 Agent 或换一种策略。" if same_agent else "",
             ]
             state.reflexion = "\n".join(p for p in reflexion_parts if p)
-            w({"type": "token", "token": "\n⚠️ 评估器判定任务未完成，将继续处理...\n"})
+            w({"type": "token", "token": "\n> 🔄 评估器判定任务未完成，继续处理...\n"})
         return state
 
     @staticmethod
     def _should_trigger_critic(agent_name: str, called_tools: list[str]) -> bool:
         if agent_name == "critic":
             return False
-        if agent_name == "creator" and set(called_tools) & PRODUCTION_TOOLS:
-            return True
+        if agent_name == "creator":
+            prod = set(called_tools) & PRODUCTION_TOOLS
+            # 章节写入已有流式自检，跳过 Critic 以降低延迟
+            if prod and prod <= CHAPTER_TOOLS:
+                return False
+            if prod:
+                return True
         if agent_name == "editor":
             write_count = len(set(called_tools) & EDITOR_WRITE_TOOLS)
             if write_count >= 2:
@@ -431,7 +436,14 @@ class AgentLoop:
             critic_result = await critic.run(task, state, stream_writer=w)
             w({"type": "critic_review_done", "success": critic_result.success, "summary": critic_result.summary[:200]})
             return critic_result
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Critic review failed", exc_info=True)
+            w({
+                "type": "critic_review_done",
+                "success": False,
+                "summary": f"审查异常：{type(e).__name__}",
+            })
             return None
 
     async def _agent_node(self, state: ChatState) -> ChatState:

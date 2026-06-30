@@ -158,6 +158,90 @@ describe('useEditorStore', () => {
       expect(store.isGenerating).toBe(false)
       expect(store.abortController).toBeNull()
     })
+
+    it('pinView keeps sidebar field visible during generation', () => {
+      const store = useEditorStore()
+      store.startGeneration()
+      store.handleGenerateEvent({ type: 'generate_start', target: 'chapter_new' })
+      store.handleGenerateEvent({ type: 'generate_token', target: 'chapter_new', token: '流式' })
+      store.pinView('settings_md_content')
+
+      store.handleGenerateEvent({
+        type: 'field_content',
+        target: 'chapter_6',
+        content: '第六章正文',
+      })
+
+      expect(store.editingField).toBe('settings_md_content')
+      expect(store.generatingStreamContent).toBe('第六章正文')
+      expect(store.generatingTarget).toBe('chapter_6')
+      expect(store.streamingFieldContent).not.toBe('第六章正文')
+    })
+
+    it('generate_token only writes to generatingStreamContent', () => {
+      const store = useEditorStore()
+      store.editingField = 'settings_md_content'
+      store.streamingFieldContent = '设定原文'
+      store.handleGenerateEvent({ type: 'generate_start', target: 'chapter_new' })
+      store.pinView('settings_md_content')
+      store.handleGenerateEvent({ type: 'generate_token', target: 'chapter_new', token: '新章' })
+
+      expect(store.generatingStreamContent).toBe('新章')
+      expect(store.streamingFieldContent).toBe('设定原文')
+    })
+
+    it('pinView on generating target resumes auto-follow', () => {
+      const store = useEditorStore()
+      store.startGeneration()
+      store.handleGenerateEvent({ type: 'generate_start', target: 'chapter_new' })
+      store.pinView('settings_md_content')
+      expect(store.viewPinned).toBe(true)
+
+      store.pinView('chapter_new')
+      expect(store.viewPinned).toBe(false)
+      expect(store.editingField).toBe('chapter_new')
+    })
+
+    it('generate_start clears generatingStreamContent but not browsing chapter buffer when pinned', () => {
+      const store = useEditorStore()
+      store.startGeneration()
+      store.streamingChapterContent = '第一章正文'
+      store.pinView('chapter_1')
+      store.generatingStreamContent = '残留'
+
+      store.handleGenerateEvent({ type: 'generate_start', target: 'chapter_new' })
+      store.handleGenerateEvent({ type: 'generate_token', target: 'chapter_new', token: '新章' })
+
+      expect(store.streamingChapterContent).toBe('第一章正文')
+      expect(store.generatingStreamContent).toBe('新章')
+      expect(store.editingField).toBe('chapter_1')
+    })
+
+    it('field_content updates generatingTarget from chapter_new to saved chapter', () => {
+      const store = useEditorStore()
+      store.startGeneration()
+      store.handleGenerateEvent({ type: 'generate_start', target: 'chapter_new' })
+      store.handleGenerateEvent({ type: 'generate_token', target: 'chapter_new', token: '正文' })
+
+      store.handleGenerateEvent({
+        type: 'field_content',
+        target: 'chapter_6',
+        content: '正文',
+      })
+
+      expect(store.generatingTarget).toBe('chapter_6')
+      expect(store.generatingStreamContent).toBe('正文')
+      expect(store.streamingChapterContent).toBe('正文')
+    })
+
+    it('startGeneration clears pendingChapterTitle', () => {
+      const store = useEditorStore()
+      store.pendingChapterTitle = '正文卷 第6章 查账寻踪'
+
+      store.startGeneration()
+
+      expect(store.pendingChapterTitle).toBe('')
+    })
   })
 
   describe('content history', () => {

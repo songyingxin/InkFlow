@@ -40,13 +40,15 @@ async def chat_stream_api(
         async with app_state.lock:
             state = app_state.novel_state
             user_msg = request.message
-            history = ConversationMemory.load_chat_messages(state, rounds=5)
+            display_msg = request.display_message.strip() or user_msg
+            history = ConversationMemory.load_chat_messages(state, rounds=5, for_agent=True)
             messages = history + [{"role": "user", "content": user_msg}]
             try:
                 async for evt in svc_chat_stream(
                     state,
                     messages,
                     field_values=request.field_values,
+                    user_display_message=display_msg,
                 ):
                     yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
             except Exception as e:

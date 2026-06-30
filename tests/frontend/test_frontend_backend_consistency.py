@@ -51,6 +51,7 @@ class TestFieldConsistency:
         content = _read_ts_file("types/index.ts")
         assert "暂无设定" in content
         assert "暂无角色" in content
+        assert "暂无地点" in content
         assert "暂无大纲" in content
         assert "暂无伏笔" in content
         assert "暂无关系图谱" in content
@@ -79,7 +80,9 @@ class TestApiEndpointConsistency:
             "/api/chat/resume",
             "/api/chat/history",
             "/api/chat/clear",
-            "/api/chapters/import-batch",
+            "/api/maintenance/daily-sync/status",
+            "/api/maintenance/daily-sync/dismiss",
+            "/api/maintenance/daily-sync/run",
         ]
 
         for endpoint in expected_endpoints:
@@ -96,6 +99,7 @@ class TestApiEndpointConsistency:
             "/api/fields",
             "/api/chat",
             "/api/memory",
+            "/api/maintenance",
         ]
 
         for prefix in expected_prefixes:
@@ -109,7 +113,8 @@ class TestApiEndpointConsistency:
 
 class TestSseEventConsistency:
     def test_frontend_handles_all_backend_event_types(self):
-        chat_content = _read_ts_file("components/ChatPanel.vue")
+        handler_content = _read_ts_file("composables/useSseHandler.ts")
+        types_content = _read_ts_file("types/index.ts")
 
         backend_event_types = [
             "token",
@@ -132,10 +137,25 @@ class TestSseEventConsistency:
             "plan_step_start",
             "plan_step_complete",
             "plan_completed",
+            "agent_activity",
+            "plan_replan",
+            "critic_review_start",
+            "critic_review_done",
+            "daily_sync_start",
+            "daily_sync_done",
+            "state",
         ]
 
         for evt_type in backend_event_types:
-            assert evt_type in chat_content, f"前端 ChatPanel 未处理事件类型: {evt_type}"
+            assert evt_type in types_content, f"前端 types/index.ts 缺少事件类型: {evt_type}"
+            if evt_type in ("critic_review_start", "critic_review_done", "daily_sync_start", "daily_sync_done", "state"):
+                assert evt_type in handler_content, (
+                    f"useSseHandler 未处理事件类型: {evt_type}"
+                )
+            else:
+                assert f"case '{evt_type}':" in handler_content, (
+                    f"useSseHandler 未处理事件类型: {evt_type}"
+                )
 
 
 # ======================================================================

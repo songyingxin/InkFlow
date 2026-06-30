@@ -36,7 +36,7 @@ async def handle_init_novel(
     novel_state.set_memory_path(str(novel_state.memory_files.base_path or ""))
     NovelMemory.initialize_project_files(novel_state, title)
     ConversationMemory.initialize_project_files(novel_state, title)
-    w({"type": "token", "token": f"📖 正在初始化小说「{title}」...\n\n"})
+    w({"type": "token", "token": f"\n---\n### 📖 初始化 ·「{title}」\n\n"})
     context_parts = [f"书名：{title}"]
     if genre:
         context_parts.append(f"题材：{genre}")
@@ -63,7 +63,7 @@ async def handle_init_novel(
     ]
     completed = []
     for field, label, request in steps:
-        w({"type": "token", "token": f"📝 正在生成{label}...\n"})
+        w({"type": "token", "token": f"\n### 📝 {label}\n\n"})
         w({"type": "generate_start", "target": field})
         full_content = ""
 
@@ -91,7 +91,7 @@ async def handle_init_novel(
         w(
             {
                 "type": "token",
-                "token": f"✅ {label}生成完成（{len(full_content)}字）\n\n",
+                "token": f"\n### ✅ {label}\n\n**{len(full_content)}** 字 | 已完成\n",
             }
         )
 
@@ -100,13 +100,7 @@ async def handle_init_novel(
     w(
         {
             "type": "token",
-            "token": f"🎉 小说「{title}」初始化完成！已生成：{'、'.join(completed)}\n",
-        }
-    )
-    w(
-        {
-            "type": "token",
-            "token": "💡 你现在可以使用 continue_writing 开始写第一章了。\n",
+            "token": f"\n### 🎉 「{title}」初始化完成\n\n已生成：{', '.join(completed)}\n\n> 💡 使用 `continue_writing` 开始写第一章\n\n",
         }
     )
     return f"小说「{title}」初始化完成，已生成：{'、'.join(completed)}"

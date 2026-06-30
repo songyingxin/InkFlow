@@ -33,6 +33,7 @@ Plan-Execute 循环：
 """
 
 from typing import TYPE_CHECKING
+import logging
 from ..runtime import drain_stream, TOOL_CALL_MODEL, CONTEXT_WINDOW, ContextOverflowError
 from ..runtime.compression import MessageCompressor
 from ..prompt_builder import PromptBuilder
@@ -46,9 +47,14 @@ from .plan import (
 )
 from ...config import tc
 from .handoff import build_handoff_schemas, handle_handoff, execute_subagent
+from .intent import resolve_fast_route, FastDirectTool, FastHandoffRoute, FastGuideSyncButton, guide_sync_settings_message
+from .activity import build_handoff_step, build_activity_trace
+from ..tools.common import ToolResult
 
 if TYPE_CHECKING:
     from ..graph import ChatState
+
+logger = logging.getLogger(__name__)
 
 
 def _persist_plan(state: "ChatState"):
@@ -58,7 +64,7 @@ def _persist_plan(state: "ChatState"):
         session = Session(state.novel_state)
         session.save_plan_state(state.plan, state.plan_step, state.plan_status)
     except Exception:
-        pass
+        logger.warning("Plan 状态持久化失败", exc_info=True)
 
 
 class LeadAgent:
@@ -102,6 +108,68 @@ class LeadAgent:
 
         return await self._plan_or_handoff(state, w)
 
+    async def _execute_direct_tool(
+        self, state: "ChatState", w, route: FastDirectTool
+    ) -> SubagentResult:
+        """直达工具：跳过 Creator ReAct，立即开始章节流式生成。"""
+        from ..tools.registry import ToolRegistry
+
+        ToolRegistry.discover()
+        handler = ToolRegistry.get_handler(route.tool)
+        if handler is None:
+            return SubagentResult(
+                agent_name=route.agent,
+                success=False,
+                error=f"未注册工具：{route.tool}",
+            )
+
+        w(
+            {
+                "type": "handoff",
+                "from": "lead",
+                "to": route.agent,
+                "task": state.user_request[: tc.handoff_task_chars],
+            }
+        )
+        w(
+            {
+                "type": "agent_activity",
+                "step": build_handoff_step(route.agent, status="running"),
+            }
+        )
+        label = "续写" if route.tool == "continue_writing" else "生成章节"
+        w({"type": "token", "token": f"\n---\n### ✍️ {label}\n\n"})
+
+        try:
+            result_msg = await handler(state, **route.kwargs)
+            if isinstance(result_msg, ToolResult):
+                success = result_msg.success
+                content = result_msg.content
+            elif isinstance(result_msg, str):
+                content = result_msg
+                success = True
+            else:
+                content = str(result_msg)
+                success = True
+            return SubagentResult(
+                agent_name=route.agent,
+                success=success,
+                summary=content,
+                user_reply=content,
+                called_tools=[route.tool],
+                tool_results=[content],
+                activity=build_activity_trace(route.agent, [route.tool]),
+            )
+        except Exception as e:
+            err_msg = str(e) or type(e).__name__
+            logger.warning("直达工具 %s 失败", route.tool, exc_info=True)
+            return SubagentResult(
+                agent_name=route.agent,
+                success=False,
+                error=err_msg,
+                called_tools=[route.tool],
+            )
+
     async def _plan_or_handoff(self, state: "ChatState", w) -> SubagentResult | str:
         """
         Harness 合并入口：单次 LLM 调用完成 Plan 生成与 Handoff 决策
@@ -113,6 +181,23 @@ class LeadAgent:
         简单请求从 2 次降为 1 次，首 token 延迟减少约 50%。
         """
         messages = self._build_harness_messages(state)
+
+        route = resolve_fast_route(state)
+        if isinstance(route, FastDirectTool):
+            return await self._execute_direct_tool(state, w, route)
+        if isinstance(route, FastGuideSyncButton):
+            msg = guide_sync_settings_message()
+            w({"type": "guide_sync_button"})
+            w({"type": "token", "token": msg + "\n"})
+            return SubagentResult(
+                agent_name="lead",
+                success=True,
+                summary=msg,
+                user_reply=msg,
+            )
+        if isinstance(route, FastHandoffRoute):
+            return await execute_subagent(route.agent, route.task, state, w)
+
         try:
             drained = await drain_stream(
                 messages,
@@ -137,7 +222,7 @@ class LeadAgent:
                 )
             except Exception as api_err:
                 err_msg = str(api_err) or type(api_err).__name__
-                w({"type": "token", "token": f"⚠️ LLM 调用失败：{err_msg}\n"})
+                w({"type": "token", "token": f"\n### ⚠️ LLM 调用失败\n\n**原因：**{err_msg}\n"})
                 return SubagentResult(
                     agent_name="lead",
                     success=False,
@@ -145,7 +230,7 @@ class LeadAgent:
                 )
         except Exception as api_err:
             err_msg = str(api_err) or type(api_err).__name__
-            w({"type": "token", "token": f"⚠️ LLM 调用失败：{err_msg}\n"})
+            w({"type": "token", "token": f"\n### ⚠️ LLM 调用失败\n\n**原因：**{err_msg}\n"})
             return SubagentResult(
                 agent_name="lead",
                 success=False,

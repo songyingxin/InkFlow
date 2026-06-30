@@ -20,8 +20,17 @@ from ..agent.memory.conversation.session import Session
 _agent = get_default_agent
 
 
+def _get_thread_id(novel_state: NovelState) -> str:
+    base = novel_state.memory_files.base_path
+    if base is not None:
+        name = base.name
+        if name and name != "_uninitialized":
+            return name
+    return novel_state.meta.title or "default"
+
+
 def _get_thread_config(novel_state: NovelState) -> dict:
-    return {"configurable": {"thread_id": novel_state.meta.title or "default"}}
+    return {"configurable": {"thread_id": _get_thread_id(novel_state)}}
 
 
 async def _check_interrupt(novel_state: NovelState) -> dict | None:
@@ -39,6 +48,7 @@ async def chat_stream(
     novel_state: NovelState,
     messages: list[dict],
     field_values: dict[str, str] | None = None,
+    user_display_message: str = "",
 ) -> AsyncGenerator[dict, None]:
     """
     启动 LangGraph 工作流并流式转发事件
@@ -72,7 +82,10 @@ async def chat_stream(
     Session(novel_state).start()
     new_user_msg = messages[-1] if messages else {}
     if new_user_msg.get("role") == "user":
-        entry_id = ConversationMemory.save_chat_message(novel_state, new_user_msg)
+        save_msg = dict(new_user_msg)
+        if user_display_message:
+            save_msg["display_content"] = user_display_message
+        entry_id = ConversationMemory.save_chat_message(novel_state, save_msg)
         state.last_chat_entry_id = entry_id
 
     config = _get_thread_config(novel_state)

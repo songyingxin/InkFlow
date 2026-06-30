@@ -228,7 +228,7 @@ async def handle_update_field(
     existing = (
         state.field_values.get(full_field) or getattr(novel_state, full_field, "") or ""
     )
-    w({"type": "token", "token": f"✏️ 正在修改{label}...\n"})
+    w({"type": "token", "token": f"\n---\n### ✏️ 修改 · {label}\n\n"})
     w({"type": "generate_start", "target": full_field})
     try:
         if patches:
@@ -244,7 +244,7 @@ async def handle_update_field(
                 w(
                     {
                         "type": "token",
-                        "token": "\n⚠️ patches 精确/模糊匹配均失败，自动降级到 LLM 修改模式...\n",
+                        "token": "\n> ⚠️ 补丁匹配失败，切换到 LLM 修改模式\n",
                     }
                 )
                 patch_intents = []
@@ -352,13 +352,20 @@ async def handle_update_field(
         cascade_hint = ""
         if cascade:
             cascade_names = "、".join(FieldRegistry.label(f) for f in cascade)
-            cascade_hint = f"\n\n💡 提示：修改{label}后，以下字段可能需要同步更新：{cascade_names}。如需更新请使用对应的 generate 工具。"
+            cascade_hint = f"\n> 💡 以下字段可能需要同步：**{cascade_names}**\n"
 
-        return f"{label}已修改并保存，共{len(full_content)}字{cascade_hint}"
+        w({"type": "token", "token": (
+            f"\n---\n"
+            f"### ✅ {label} 已修改\n\n"
+            f"**{len(full_content)}** 字 | 已保存\n"
+            f"{cascade_hint}\n"
+        )})
+
+        return f"{label}已修改并保存，共{len(full_content)}字"
 
     except Exception as e:
         logger.error("update_field 失败", exc_info=True)
         error_msg = str(e) or type(e).__name__
         w({"type": "generate_done", "target": full_field})
-        w({"type": "token", "token": f"⚠️ 修改{label}失败：{error_msg}\n"})
+        w({"type": "token", "token": f"\n### ⚠️ {label}修改失败\n\n**原因：**{error_msg}\n"})
         return f"update_field 失败：{error_msg}"

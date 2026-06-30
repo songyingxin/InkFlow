@@ -3,7 +3,7 @@
 
 测试 FastAPI 路由层：
 - /api/books: 书籍列表、创建、选择、删除
-- /api/chapters: 章节内容获取、添加、更新、删除、批量导入
+- /api/chapters: 章节内容获取、添加、更新、删除
 - /api/fields: 字段更新、章节标题生成
 - /api/chat: 对话历史、清空、SSE 流
 - /api/state: 全局状态查询
@@ -202,95 +202,6 @@ class TestChaptersAPI:
 
 
 # ======================================================================
-# /api/chapters/import-batch
-# ======================================================================
-
-class TestImportBatchAPI:
-    @patch("novel_agent.api.routes.chapters.build_state_summary", return_value={})
-    @patch("novel_agent.api.routes.chapters.svc_import_chapter", new_callable=AsyncMock, return_value={"idx": 1, "title": "第一章"})
-    def test_import_batch_json_array(self, mock_import, mock_summary, client, app_state):
-        _init_book(app_state)
-        app_state.current_book_name = "测试小说"
-
-        chapters = [
-            {"标题": "第一章", "正文内容": "内容1"},
-            {"title": "Chapter 2", "content": "Content 2"},
-        ]
-        file_content = json.dumps(chapters, ensure_ascii=False).encode("utf-8")
-        resp = client.post(
-            "/api/chapters/import-batch",
-            files={"file": ("chapters.json", BytesIO(file_content), "application/json")},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["imported_count"] == 2
-
-    def test_import_batch_no_book(self, client, app_state):
-        app_state.current_book_name = ""
-        file_content = b"[]"
-        resp = client.post(
-            "/api/chapters/import-batch",
-            files={"file": ("chapters.json", BytesIO(file_content), "application/json")},
-        )
-        assert resp.status_code == 400
-
-    @patch("novel_agent.api.routes.chapters.build_state_summary", return_value={})
-    def test_import_batch_invalid_json(self, mock_summary, client, app_state):
-        _init_book(app_state)
-        app_state.current_book_name = "测试小说"
-        file_content = b"this is not json"
-        resp = client.post(
-            "/api/chapters/import-batch",
-            files={"file": ("chapters.json", BytesIO(file_content), "application/json")},
-        )
-        assert resp.status_code == 400
-
-
-# ======================================================================
-# _parse_chapters_json
-# ======================================================================
-
-class TestParseChaptersJson:
-    def test_valid_json_array(self):
-        from novel_agent.api.routes.chapters import _parse_chapters_json
-        content = '[{"标题": "第一章", "正文内容": "内容"}]'
-        result = _parse_chapters_json(content)
-        assert result is not None
-        assert len(result) == 1
-
-    def test_valid_json_object(self):
-        from novel_agent.api.routes.chapters import _parse_chapters_json
-        content = '{"标题": "第一章", "正文内容": "内容"}'
-        result = _parse_chapters_json(content)
-        assert result is not None
-        assert len(result) == 1
-
-    def test_ndjson(self):
-        from novel_agent.api.routes.chapters import _parse_chapters_json
-        content = '{"标题": "第一章", "正文内容": "内容1"}\n{"标题": "第二章", "正文内容": "内容2"}'
-        result = _parse_chapters_json(content)
-        assert result is not None
-        assert len(result) == 2
-
-    def test_empty_string(self):
-        from novel_agent.api.routes.chapters import _parse_chapters_json
-        result = _parse_chapters_json("")
-        assert result is None
-
-    def test_invalid_json(self):
-        from novel_agent.api.routes.chapters import _parse_chapters_json
-        result = _parse_chapters_json("not json at all")
-        assert result is None
-
-    def test_adjacent_braces(self):
-        from novel_agent.api.routes.chapters import _parse_chapters_json
-        content = '{"标题": "第一章", "正文内容": "内容1"}{"标题": "第二章", "正文内容": "内容2"}'
-        result = _parse_chapters_json(content)
-        assert result is not None
-        assert len(result) == 2
-
-
-# ======================================================================
 # /api/fields
 # ======================================================================
 
@@ -317,13 +228,13 @@ class TestFieldsAPI:
         assert resp.status_code == 400
 
     @patch("novel_agent.api.routes.fields.build_state_summary", return_value={})
-    @patch("novel_agent.api.routes.fields.svc_generate_chapter_title", new_callable=AsyncMock, return_value="新章节标题")
+    @patch("novel_agent.api.routes.fields.svc_generate_chapter_title", new_callable=AsyncMock, return_value="第2章 风云际会")
     def test_generate_chapter_title(self, mock_gen, mock_summary, client, app_state):
         _init_book(app_state)
         resp = client.post("/api/fields/generate-chapter-title", json={"field": "title", "value": "关于主角"})
         assert resp.status_code == 200
         data = resp.json()
-        assert data["title"] == "新章节标题"
+        assert data["title"] == "第2章 风云际会"
 
     def test_generate_chapter_title_no_outline(self, client, app_state):
         app_state.novel_state = NovelState()

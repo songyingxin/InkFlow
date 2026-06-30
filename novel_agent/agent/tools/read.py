@@ -1,16 +1,14 @@
 """
 读取类工具处理器
-处理 read_novel_content 工具，供 Agent 读取小说已有内容回答用户提问。
-设计参考：
-  - Claude Code: 读取工具支持 query 过滤，避免一次性加载过多内容
-  - Hermes: 工具结果作为上下文注入，需要精简以控制 token 开销
+处理 read_novel_content / search_memory / foreshadowing_status 等 Reader 专用工具。
 """
 
+import re
 from ..memory.novel import NovelMemory
 from ..memory.manager import search_memory
 from ...core.field_registry import FieldRegistry
 from .registry import register_tool
-from .schema import READ_NOVEL_CONTENT, SEARCH_MEMORY
+from .schema import READ_NOVEL_CONTENT, SEARCH_MEMORY, FORESHADOWING_STATUS
 
 
 def _filter_by_query(content: str, query: str) -> str:
@@ -176,12 +174,25 @@ def _search_fields(novel_state, query: str, limit: int) -> list[str]:
     return results
 
 
+def _read_chapter_summaries(novel_state, query: str | None) -> str:
+    content = NovelMemory.assemble_historical_outline(novel_state, written_only=True)
+    if content == "暂无历史大纲":
+        return content
+    if query:
+        content = _filter_by_query(content, query)
+        return f"以下是历史大纲（outline_structure 摘要）中与「{query}」相关的内容：\n{content}"
+    return f"以下是已完成章节的历史大纲（outline_structure 各章摘要）：\n{content}"
+
+
 _READ_STRATEGIES = {
     "chapter": lambda state, ct, cn, q, c: _read_chapter(state.novel_state, cn, q),
     "recent_chapters": lambda state, ct, cn, q, c: _read_recent_chapters(
         state.novel_state, c, q
     ),
     "search": lambda state, ct, cn, q, c: _search_chapters(state.novel_state, q, c),
+    "chapter_summaries": lambda state, ct, cn, q, c: _read_chapter_summaries(
+        state.novel_state, q
+    ),
 }
 
 
@@ -238,3 +249,106 @@ async def handle_search_memory(
         label = source_labels.get(r.source, r.source)
         lines.append(f"[{label}] {r.content[:300]}")
     return "\n---\n".join(lines)
+
+
+def _load_field_safe(novel_state, field: str) -> str:
+    NovelMemory.ensure_field_loaded(novel_state, field)
+    return getattr(novel_state, field, "") or ""
+
+
+_STATUS_PATTERNS = {
+    "planning": re.compile(r"🔵|规划中", re.IGNORECASE),
+    "active": re.compile(r"🟡|活跃中", re.IGNORECASE),
+    "resolved": re.compile(r"🟢|已回收", re.IGNORECASE),
+    "abandoned": re.compile(r"🔴|已废弃", re.IGNORECASE),
+    "deviated": re.compile(r"⚪|已偏移", re.IGNORECASE),
+}
+
+
+def _parse_foreshadowing_entries(foreshadowing: str) -> list[dict]:
+    entries = []
+    lines = foreshadowing.split("\n")
+    current = None
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        status = None
+        for status_name, pattern in _STATUS_PATTERNS.items():
+            if pattern.search(line_stripped):
+                status = status_name
+                break
+        if status:
+            if current:
+                entries.append(current)
+            current = {"status": status, "text": line_stripped}
+        elif current:
+            current["text"] += " " + line_stripped
+    if current:
+        entries.append(current)
+    return entries
+
+
+@register_tool("foreshadowing_status", schema=FORESHADOWING_STATUS, toolset="reader")
+async def handle_foreshadowing_status(state, filter_status: str = "all") -> str:
+    novel_state = state.novel_state
+    foreshadowing = _load_field_safe(novel_state, "foreshadowing_md_content")
+    if (
+        not foreshadowing
+        or foreshadowing.startswith("# 伏笔清单")
+        and len(foreshadowing) < 50
+    ):
+        return "伏笔清单为空，尚未生成。"
+
+    entries = _parse_foreshadowing_entries(foreshadowing)
+    if not entries:
+        return "伏笔清单中暂无伏笔条目。"
+
+    status_labels = {
+        "planning": "🔵 规划中",
+        "active": "🟡 活跃中",
+        "resolved": "🟢 已回收",
+        "abandoned": "🔴 已废弃",
+        "deviated": "⚪ 已偏移",
+    }
+    grouped = {}
+    for entry in entries:
+        s = entry["status"]
+        grouped.setdefault(s, []).append(entry)
+
+    if filter_status == "active":
+        filtered = {"active": grouped.get("active", [])}
+    elif filter_status == "unresolved":
+        filtered = {
+            "planning": grouped.get("planning", []),
+            "active": grouped.get("active", []),
+        }
+    else:
+        filtered = grouped
+
+    lines = ["📋 伏笔状态报告\n"]
+    total = 0
+    for status_name in ("planning", "active", "resolved", "abandoned", "deviated"):
+        items = filtered.get(status_name, [])
+        if not items:
+            continue
+        label = status_labels[status_name]
+        lines.append(f"\n### {label}（{len(items)}个）")
+        for item in items:
+            text = item["text"][:120]
+            lines.append(f"- {text}")
+        total += len(items)
+
+    lines.append(f"\n---\n总计：{total}个伏笔")
+    unresolved_count = len(grouped.get("planning", [])) + len(grouped.get("active", []))
+    if unresolved_count > 0:
+        lines.append(
+            f"⚠️ 未回收伏笔：{unresolved_count}个（规划中{len(grouped.get('planning', []))}个 + 活跃中{len(grouped.get('active', []))}个）"
+        )
+        active_entries = grouped.get("active", [])
+        if active_entries:
+            lines.append("\n💡 建议优先回收以下活跃伏笔：")
+            for item in active_entries[:5]:
+                lines.append(f"  - {item['text'][:100]}")
+
+    return "\n".join(lines)

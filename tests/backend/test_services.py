@@ -101,6 +101,7 @@ class TestChatService:
     def test_get_thread_config(self):
         from novel_agent.service.chat_service import _get_thread_config
         ns = NovelState()
+        ns.set_memory_path("/tmp/test/测试小说")
         ns.meta = MetaInfo(title="测试小说", total_chapters=0)
         config = _get_thread_config(ns)
         assert config["configurable"]["thread_id"] == "测试小说"

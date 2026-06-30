@@ -30,6 +30,10 @@
       <circle cx="8" cy="5.5" r="2.5" />
       <path d="M3 13.5c0-2.5 2-4 5-4s5 1.5 5 4" />
     </template>
+    <template v-else-if="name === 'locations'">
+      <path d="M8 1.5C5.5 1.5 3.5 3.5 3.5 6c0 3.5 4.5 8.5 4.5 8.5S12.5 9.5 12.5 6c0-2.5-2-4.5-4.5-4.5z" />
+      <circle cx="8" cy="6" r="1.5" />
+    </template>
     <template v-else-if="name === 'relationships'">
       <circle cx="4.5" cy="4.5" r="2" />
       <circle cx="11.5" cy="11.5" r="2" />
@@ -44,7 +48,7 @@
 
 <script setup lang="ts">
 withDefaults(defineProps<{
-  name: 'book' | 'outline' | 'future' | 'settings' | 'characters' | 'relationships' | 'foreshadowing'
+  name: 'book' | 'outline' | 'future' | 'settings' | 'characters' | 'locations' | 'relationships' | 'foreshadowing'
   size?: number
   strokeWidth?: number
 }>(), {

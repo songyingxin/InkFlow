@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 class ChapterOutline(BaseModel):
     """
     单章大纲条目
-    对应 outline.md 中每一章的结构化信息。
+    对应 outline_structure.json 中每一章的结构化信息。
     当 is_written=True 时，表示该章节已有正文（chapters/NNN.md 存在）。
     Attributes:
         title: 章节标题，如 "第一章 风起云涌"
@@ -72,7 +72,8 @@ class MetaInfo(BaseModel):
         characters_read_ch: 角色档案的已读章号
         relationships_read_ch: 关系图谱的已读章号
         foreshadowing_read_ch: 伏笔清单的已读章号
-        outline_historical_read_ch: 历史大纲的已读章号
+        locations_read_ch: 地点档案的已读章号
+        outline_future_read_ch: 未来大纲已同步到的章号
         round_count: 持久化对话轮次计数器（用于定期日志生成）
         chapter_content_hashes: 章节正文 MD5 哈希（save_chapter / delete_chapter 维护）。
             用于 handoff 产出验证等运行时检测，非字段过期机制。
@@ -84,9 +85,14 @@ class MetaInfo(BaseModel):
     characters_read_ch: int = 0
     relationships_read_ch: int = 0
     foreshadowing_read_ch: int = 0
-    outline_historical_read_ch: int = 0
+    locations_read_ch: int = 0
+    outline_future_read_ch: int = 0
     round_count: int = 0
     chapter_content_hashes: dict[str, str] = Field(default_factory=dict)
+    last_daily_sync_date: str = ""
+    daily_sync_dismissed_date: str = ""
+    daily_sync_prompt_hour: int = 8
+    daily_sync_enabled: bool = True
 
 
 class MemoryFiles(BaseModel):
@@ -97,12 +103,12 @@ class MemoryFiles(BaseModel):
     所有子路径从 base_path 自动派生，避免 Path.cwd() 导致文件误写到源码目录。
     文件体系：
     ┌─────────────────────────────────────────────────────┐
-    │ 持久化记忆文件（6个 + chapters目录）                    │
+    │ 持久化记忆文件（6个字段 + chapters + outline_structure） │
     │  settings.md            - 设定（风格+冲突+世界观+力量体系）│
     │  characters.md          - 角色档案                     │
+    │  locations.md           - 地点档案                     │
     │  relationships.md       - 关系图谱                     │
     │  foreshadowing.md       - 伏笔清单                     │
-    │  outline_historical.md  - 历史大纲                     │
     │  outline_future.md      - 未来大纲                     │
     │  outline_structure.json - 章节索引                     │
     │  meta.json              - 元信息                       │
@@ -119,10 +125,10 @@ class MemoryFiles(BaseModel):
 
     base_path: Path | None = None
     settings_path: Path = Path()
-    outline_historical_path: Path = Path()
     outline_future_path: Path = Path()
     outline_structure_path: Path = Path()
     characters_path: Path = Path()
+    locations_path: Path = Path()
     relationships_path: Path = Path()
     foreshadowing_path: Path = Path()
     meta_path: Path = Path()
@@ -144,10 +150,10 @@ class MemoryFiles(BaseModel):
     def _update_paths(self):
         p = self.base_path
         self.settings_path = p / "settings.md"
-        self.outline_historical_path = p / "outline_historical.md"
         self.outline_future_path = p / "outline_future.md"
         self.outline_structure_path = p / "outline_structure.json"
         self.characters_path = p / "characters.md"
+        self.locations_path = p / "locations.md"
         self.relationships_path = p / "relationships.md"
         self.foreshadowing_path = p / "foreshadowing.md"
         self.meta_path = p / "meta.json"
@@ -172,9 +178,9 @@ class NovelState(BaseModel):
         outline: 大纲结构（包含所有章节的标题和摘要）
         memory_files: 记忆文件路径配置
         settings_md_content: 设定内容（风格+冲突+世界观+力量体系+卷级规划）
-        outline_historical_md_content: 历史大纲内容（内存缓存）
         outline_future_md_content: 未来大纲内容（内存缓存）
         characters_md_content: 角色档案内容（内存缓存）
+        locations_md_content: 地点档案内容（内存缓存）
         relationships_md_content: 关系图谱内容（内存缓存）
         foreshadowing_md_content: 伏笔清单内容（内存缓存）
         meta: 元信息（书名、章数、各字段已读进度）
@@ -183,9 +189,9 @@ class NovelState(BaseModel):
     outline: Optional[NovelOutline] = None
     memory_files: MemoryFiles = Field(default_factory=MemoryFiles)
     settings_md_content: str = ""
-    outline_historical_md_content: str = ""
     outline_future_md_content: str = ""
     characters_md_content: str = ""
+    locations_md_content: str = ""
     relationships_md_content: str = ""
     foreshadowing_md_content: str = ""
     meta: MetaInfo = Field(default_factory=MetaInfo)

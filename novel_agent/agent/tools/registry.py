@@ -20,6 +20,7 @@
 """
 
 import importlib
+import logging
 import pkgutil
 from pathlib import Path
 from typing import Callable, Awaitable
@@ -27,6 +28,8 @@ from typing import Callable, Awaitable
 from .common import ToolResult
 
 _HandlerType = Callable[..., Awaitable[ToolResult | str]]
+
+logger = logging.getLogger(__name__)
 
 
 class _ToolEntry:
@@ -148,7 +151,7 @@ class ToolRegistry:
                 # 模块导入即注册
                 _placeholder = module
             except Exception:
-                pass
+                logger.warning("工具模块导入失败: %s", module_name, exc_info=True)
 
         cls._discovered = True
 

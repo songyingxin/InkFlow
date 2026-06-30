@@ -19,10 +19,10 @@ import {
 import type { Book, Chapter, NovelState, ChatMessage, SseEvent, ContentSnapshot } from '@/types'
 
 const BACKEND_FIELDS = [
-  'outline_historical_md_content',
   'outline_future_md_content',
   'settings_md_content',
   'characters_md_content',
+  'locations_md_content',
   'relationships_md_content',
   'foreshadowing_md_content',
 ]
@@ -107,8 +107,8 @@ describe('SIDEBAR_FIELDS', () => {
 describe('PLACEHOLDER_DEFAULTS', () => {
   it('contains all expected placeholders', () => {
     const expected = [
-      '暂无大纲', '暂无历史大纲', '暂无未来大纲',
-      '暂无设定', '暂无角色', '暂无关系图谱', '暂无伏笔',
+      '暂无大纲', '暂无未来大纲',
+      '暂无设定', '暂无角色', '暂无地点', '暂无关系图谱', '暂无伏笔',
     ]
     expect(PLACEHOLDER_DEFAULTS).toEqual(expected)
   })
@@ -203,13 +203,12 @@ describe('Type interfaces', () => {
       messages: [],
       settings_md_content: '设定内容',
       characters_md_content: '角色内容',
-      outline_historical_md_content: '历史大纲',
       outline_future_md_content: '未来大纲',
       relationships_md_content: '关系图谱',
       foreshadowing_md_content: '伏笔清单',
     }
     expect(state.settings_md_content).toBe('设定内容')
-    expect(state.outline_historical_md_content).toBe('历史大纲')
+    expect(state.outline_future_md_content).toBe('未来大纲')
   })
 
   it('NovelState with null outline', () => {
@@ -243,8 +242,8 @@ describe('FIELD_TITLES completeness', () => {
 })
 
 describe('SIDEBAR_FIELDS ordering', () => {
-  it('historical outline is first', () => {
-    expect(SIDEBAR_FIELDS[0].field).toBe('outline_historical_md_content')
+  it('future outline is first', () => {
+    expect(SIDEBAR_FIELDS[0].field).toBe('outline_future_md_content')
   })
 
   it('foreshadowing is last', () => {

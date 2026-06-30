@@ -1,37 +1,68 @@
+import { watch, nextTick, type WatchStopHandle } from 'vue'
 import { useEditorStore } from '@/stores'
 
-const AUTO_SAVE_INTERVAL = 60000
+const DEBOUNCE_MS = 5000
+const MAX_DIRTY_MS = 30000
 
 export function useAutoSave(doSaveCurrent: (isAuto?: boolean) => Promise<void>) {
   const editorStore = useEditorStore()
-  let autoSaveTimer: ReturnType<typeof setInterval> | null = null
-  let generatedSaveTimer: ReturnType<typeof setTimeout> | null = null
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+  let maxDirtyTimer: ReturnType<typeof setTimeout> | null = null
+  let dirtyWatcher: WatchStopHandle | null = null
+  let scheduledSave: Promise<void> | null = null
 
   function stopGeneratedSaveTimer() {
-    if (generatedSaveTimer) { clearTimeout(generatedSaveTimer); generatedSaveTimer = null }
+    scheduledSave = null
   }
 
   function startGeneratedSaveTimer() {
     stopGeneratedSaveTimer()
     editorStore.hasUnsavedGenerated = true
-    generatedSaveTimer = setTimeout(() => {
+    scheduledSave = nextTick().then(() => {
+      if (!scheduledSave) return
       editorStore.hasUnsavedGenerated = false
-      generatedSaveTimer = null
+      scheduledSave = null
+      return doSaveCurrent(true)
+    })
+  }
+
+  function _scheduleSave() {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => {
+      if (!editorStore.isDirty || editorStore.isGenerating) return
+      _clearMaxDirty()
       doSaveCurrent(true)
-    }, 0)
+    }, DEBOUNCE_MS)
+  }
+
+  function _clearMaxDirty() {
+    if (maxDirtyTimer) { clearTimeout(maxDirtyTimer); maxDirtyTimer = null }
   }
 
   function startAutoSave() {
     stopAutoSave()
     editorStore.resetDirty()
-    autoSaveTimer = setInterval(() => {
-      if (!editorStore.isDirty || editorStore.isGenerating) return
-      doSaveCurrent(true)
-    }, AUTO_SAVE_INTERVAL)
+
+    dirtyWatcher = watch(
+      () => editorStore.isDirty,
+      (dirty) => {
+        if (!dirty || editorStore.isGenerating) return
+        _scheduleSave()
+        if (!maxDirtyTimer) {
+          maxDirtyTimer = setTimeout(() => {
+            if (!editorStore.isDirty || editorStore.isGenerating) { maxDirtyTimer = null; return }
+            maxDirtyTimer = null
+            doSaveCurrent(true)
+          }, MAX_DIRTY_MS)
+        }
+      },
+    )
   }
 
   function stopAutoSave() {
-    if (autoSaveTimer) { clearInterval(autoSaveTimer); autoSaveTimer = null }
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
+    _clearMaxDirty()
+    if (dirtyWatcher) { dirtyWatcher(); dirtyWatcher = null }
     editorStore.resetDirty()
   }
 

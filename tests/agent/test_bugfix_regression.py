@@ -361,7 +361,7 @@ class TestSubagentTaskCompleteGuard:
 
     def test_editor_write_tools_set(self):
         write_tools = self._get_write_tools()
-        editor_expected = {"update_field", "update_outline", "scan_foreshadowing"}
+        editor_expected = {"update_field", "update_outline"}
         assert editor_expected.issubset(write_tools)
 
     def test_creator_write_tools_set(self):
@@ -436,34 +436,31 @@ class TestLeadHarnessRouting:
         """Template should define principles, not enumerate every possible phrase"""
         from novel_agent.agent.templates import load_template
         tpl = load_template("lead-router")
-        # Core principles present
-        assert "操作的是文件本身还是文件里的内容" in tpl
-        assert "操作的是文件里的某个片段还是文件整体" in tpl
         assert "文件整体 → Creator" in tpl
         assert "文件局部 → Editor" in tpl
+        assert "路由规则" in tpl
 
     def test_three_question_framework(self):
-        """Creator vs Editor distinguished by 3 questions, not phrase matching"""
+        """Creator vs Editor distinguished by scope rules, not phrase matching"""
         from novel_agent.agent.templates import load_template
         tpl = load_template("lead-router")
-        assert "文件存在吗？" in tpl
-        assert "改动范围多大？" in tpl
-        assert "用户的说辞" in tpl
+        assert "操作文件整体 → Creator" in tpl
+        assert "修改文件局部 → Editor" in tpl
+        assert "路由速查" in tpl
 
     def test_editor_covers_add_volume(self):
-        """加入第四卷 is naturally Editor: append to existing file section"""
+        """局部增删改条目走 Editor"""
         from novel_agent.agent.templates import load_template
         tpl = load_template("lead-router")
-        # Verify the decision table has this case
-        assert "加入第四卷" in tpl
+        assert "加条目" in tpl
         assert "Editor" in tpl
-        assert "卷级规划" in tpl
+        assert "update_field" in tpl
 
     def test_creator_covers_reorganize(self):
-        """整理/梳理 → Creator via the 'restructure' principle"""
+        """梳理/整理 → Creator via restructure principle"""
         from novel_agent.agent.templates import load_template
         tpl = load_template("lead-router")
-        assert "梳理/整理写作设定" in tpl
+        assert "梳理/整理文件结构" in tpl
         assert "Creator" in tpl
 
     def test_reader_readonly(self):
@@ -472,12 +469,19 @@ class TestLeadHarnessRouting:
         tpl = load_template("lead-router")
         assert "零变更" in tpl
         assert "不产出也不修改任何文件" in tpl
+        assert "禁止分配给 Reader" in tpl
 
-    def test_add_rule_is_editor(self):
-        """在世界观里加一条规则 → Editor (append, not rewrite)"""
+    def test_generate_future_outline_routes_to_creator(self):
         from novel_agent.agent.templates import load_template
         tpl = load_template("lead-router")
-        assert "世界观里加一条规则" in tpl
+        assert "generate_*" in tpl
+        assert "Creator" in tpl
+
+    def test_add_rule_is_editor(self):
+        """局部追加条目 → Editor"""
+        from novel_agent.agent.templates import load_template
+        tpl = load_template("lead-router")
+        assert "加条目" in tpl
         assert "Editor" in tpl
 
 
@@ -502,18 +506,19 @@ class TestEditorFieldMapping:
         assert 'update_field(field="settings")' in tpl
 
     def test_field_mapping_table_covers_all_files(self):
-        """Editor template should map all 6 field files to their tools"""
+        """Editor template should map editable field files to their tools"""
         from novel_agent.agent.templates import load_template
         tpl = load_template("editor")
         assert "settings" in tpl
         assert "characters" in tpl
+        assert "locations" in tpl
         assert "relationships" in tpl
         assert "foreshadowing" in tpl
-        assert "outline_historical" in tpl
         assert "outline_future" in tpl
+        assert "同步设定" in tpl
 
     def test_outline_tools_are_for_outline_only(self):
-        """update_outline_* tools only map to outline_historical/future rows"""
+        """update_outline_* tools only map to outline_future / outline_structure rows"""
         from novel_agent.agent.templates import load_template
         tpl = load_template("editor")
         assert "卷级规划" in tpl
@@ -563,7 +568,7 @@ class TestContinueWritingNoPreUpdate:
         source = inspect.getsource(handle_continue_writing)
         title_pos = source.find("generate_chapter_title")
         content_pos = source.find("_stream_chapter_content")
-        save_pos = source.find("save_chapter")
+        save_pos = source.find("_finalize_chapter_write")
         assert title_pos < content_pos < save_pos, (
             "流程顺序应为：标题 → 内容 → 保存"
         )
@@ -712,14 +717,14 @@ class TestFrontendGenerateEventHandling:
 
     def test_editor_store_has_handle_generate_event(self):
         """editorStore 应导出 handleGenerateEvent 方法"""
-        content = _read_ts_file("stores/index.ts")
+        content = _read_ts_file("stores/editor.ts")
         assert "handleGenerateEvent" in content, (
             "editorStore 应包含 handleGenerateEvent 方法"
         )
 
     def test_editor_store_has_streaming_refs(self):
         """editorStore 应包含 streamingFieldContent 和 streamingChapterContent"""
-        content = _read_ts_file("stores/index.ts")
+        content = _read_ts_file("stores/editor.ts")
         assert "streamingFieldContent" in content, (
             "editorStore 应包含 streamingFieldContent ref"
         )
@@ -730,8 +735,9 @@ class TestFrontendGenerateEventHandling:
     def test_chatpanel_uses_handle_generate_event(self):
         """ChatPanel 的 generate 事件应委托给 editorStore.handleGenerateEvent"""
         content = _read_ts_file("components/ChatPanel.vue")
-        assert "editorStore.handleGenerateEvent" in content, (
-            "ChatPanel 应使用 editorStore.handleGenerateEvent 处理 generate 事件"
+        handler_content = _read_ts_file("composables/useSseHandler.ts")
+        assert "handleGenerateEvent" in handler_content or "editorStore.handleGenerateEvent" in content, (
+            "ChatPanel 应通过 SSE handler 委托 editorStore.handleGenerateEvent"
         )
 
     def test_chatpanel_no_direct_fieldvalues_update(self):
@@ -747,8 +753,9 @@ class TestFrontendGenerateEventHandling:
     def test_editor_page_uses_handle_generate_event(self):
         """EditorPage 的 generate 事件也应委托给 editorStore.handleGenerateEvent"""
         content = _read_ts_file("pages/EditorPage.vue")
-        assert "editorStore.handleGenerateEvent" in content, (
-            "EditorPage 应使用 editorStore.handleGenerateEvent 处理 generate 事件"
+        handler_content = _read_ts_file("composables/useSseHandler.ts")
+        assert "handleGenerateEvent" in handler_content or "editorStore.handleGenerateEvent" in content, (
+            "EditorPage 应通过 SSE handler 委托 editorStore.handleGenerateEvent"
         )
 
     def test_editor_page_binds_streaming_content(self):
@@ -1113,7 +1120,7 @@ class TestReorganizeSettingsMustWrite:
         """Lead router 模板必须将梳理/整理路由到 Creator"""
         from novel_agent.agent.templates import load_template
         tpl = load_template("lead-router")
-        assert "梳理/整理写作设定" in tpl
+        assert "梳理/整理文件结构" in tpl
         assert "Creator" in tpl
 
     def test_creator_task_complete_guard_blocks_readonly(self):

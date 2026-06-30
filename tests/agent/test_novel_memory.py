@@ -48,10 +48,15 @@ class TestNovelMemoryFieldOperations:
         NovelMemory.save_outline_future_md(ns, "未来大纲")
         assert NovelMemory.load_outline_future_md(ns) == "未来大纲"
 
-    def test_save_and_load_outline_historical(self, tmp_path):
+    def test_update_chapter_summary_in_outline_structure(self, tmp_path):
         ns = _make_novel_state(tmp_path)
-        NovelMemory.save_outline_historical_md(ns, "历史大纲")
-        assert NovelMemory.load_outline_historical_md(ns) == "历史大纲"
+        ns.outline.chapters.append(
+            ChapterOutline(title="第一章", idx=1, is_written=True)
+        )
+        NovelMemory.update_chapter_summary(ns, 1, "第一章摘要")
+        ch = ns.find_chapter_in_outline(1)
+        assert ch.content_summary == "第一章摘要"
+        assert ns.memory_files.outline_structure_path.exists()
 
     def test_save_and_load_chapter(self, tmp_path):
         ns = _make_novel_state(tmp_path)
@@ -139,3 +144,30 @@ class TestChapterOperations:
         NovelMemory.save_chapter(ns, 1, "内容")
         NovelMemory.delete_chapter(ns, 1)
         assert "1" not in ns.meta.chapter_content_hashes
+
+
+class TestChapterSummaryDetection:
+    def test_is_placeholder_summary_detects_truncation(self):
+        content = "A" * 500
+        summary = content[:200]
+        assert NovelMemory.is_placeholder_summary(summary, content) is True
+
+    def test_is_placeholder_summary_rejects_real_summary(self):
+        content = "A" * 500
+        summary = "主角经历变故，决定离开书院踏上旅途。"
+        assert NovelMemory.is_placeholder_summary(summary, content) is False
+
+    def test_get_chapters_missing_summary_includes_placeholder(self, tmp_path):
+        ns = _make_novel_state(tmp_path)
+        content = "B" * 400
+        NovelMemory.save_chapter(ns, 1, content)
+        ns.outline.chapters.append(
+            ChapterOutline(
+                title="第一章",
+                idx=1,
+                is_written=True,
+                content_summary=content[:200],
+            )
+        )
+        missing = NovelMemory.get_chapters_missing_summary(ns)
+        assert missing == [1]

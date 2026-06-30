@@ -9,13 +9,10 @@
   ├─────────────────┼───────────────────────────────────────────────────────┤
   │ 控制类           │ task_complete — 标记任务完成                           │
   │ 章节类           │ continue_writing / regenerate_chapter                 │
-  │ 生成类（整体重构）│ generate_outline / generate_outline_historical /      │
-│                 │ generate_outline_future / generate_settings /          │
-│                 │ generate_characters / generate_relationships /         │
-│                 │ generate_foreshadowing                                │
-  │ 修改类（局部修改）│ update_field — patches 模式或 LLM diff 模式           │
-  │ 更新类（增量更新）│ update_outline / update_outline_historical /          │
-  │                 │ update_outline_future                                 │
+  │ 生成类（整体重构）│ generate_outline / generate_settings /                    │
+  │                 │ generate_characters / generate_relationships /           │
+  │                 │ generate_foreshadowing                                   │
+  │ 更新类（增量更新）│ update_outline / update_chapter_summaries                 │
   │ 读取类           │ read_novel_content — 读取小说内容供 Agent 回答提问     │
   └─────────────────┴───────────────────────────────────────────────────────┘
 
@@ -112,7 +109,6 @@ MEMORY_CONSOLIDATE = tool_schema(
                     "characters",
                     "relationships",
                     "foreshadowing",
-                    "outline_historical",
                     "outline_future",
                 ],
             ),
@@ -123,37 +119,9 @@ MEMORY_CONSOLIDATE = tool_schema(
 
 # ══════════════════════════════════════════════════════════════════════
 #  分析类（Reader 专用）
+#  注意：check_consistency / analyze_pacing 已移除 — Reader 自行分析即可
 # ══════════════════════════════════════════════════════════════════════
 
-CHECK_CONSISTENCY = tool_schema(
-    "check_consistency",
-    "检查小说设定的一致性，检测跨章节的矛盾和不一致。\n"
-    "触发条件：用户要求「检查设定矛盾」「一致性检查」「有没有前后矛盾」「设定是否一致」。\n"
-    "会读取相关章节和设定字段，由 LLM 对比分析后返回矛盾列表。",
-    {
-        "properties": {
-            "scope": param_schema(
-                "string",
-                "检查范围：all=检查所有设定字段, characters=只检查角色相关, settings=只检查设定相关, recent=只检查最近3章",
-                enum=["all", "characters", "settings", "recent"],
-            ),
-        },
-    },
-)
-ANALYZE_PACING = tool_schema(
-    "analyze_pacing",
-    "分析最近若干章节的叙事节奏，统计动作/对话/描写/心理的比例分布。\n"
-    "触发条件：用户要求「分析节奏」「节奏是不是太慢了」「最近几章有没有流水账」「节奏诊断」。\n"
-    "返回各章节的节奏分布和整体建议。",
-    {
-        "properties": {
-            "chapter_count": param_schema(
-                "integer",
-                "要分析的章节数，从最新章节往前数。默认5章。",
-            ),
-        },
-    },
-)
 FORESHADOWING_STATUS = tool_schema(
     "foreshadowing_status",
     "汇总伏笔清单中所有伏笔的当前状态，按状态分类统计。\n"
@@ -177,7 +145,7 @@ FORESHADOWING_STATUS = tool_schema(
 SCAN_FORESHADOWING = tool_schema(
     "scan_foreshadowing",
     "扫描指定章节，检测是否埋设了新伏笔或回收了已有伏笔，并自动更新伏笔清单。\n"
-    "触发条件：章节生成后自动提示，或用户主动要求「检查伏笔」「扫描伏笔」。\n"
+    "仅由 Editor 顶栏「同步设定」batch（daily_sync）内自动执行；不由 Chat 单独调用。\n"
     "扫描结果会自动更新 foreshadowing 字段，无需再调用 update_field。",
     {
         "properties": {
@@ -185,6 +153,42 @@ SCAN_FORESHADOWING = tool_schema(
         },
         "required": required_params("chapter_num"),
     },
+)
+
+# ══════════════════════════════════════════════════════════════════════
+#  增量同步类（基于新增章节，与整体重构和局部修改分离）
+# ══════════════════════════════════════════════════════════════════════
+
+SYNC_SETTINGS = tool_schema(
+    "sync_settings",
+    "根据最新已完成章节，增量同步写作设定（settings.md）。\n"
+    "只读取未同步章节，检测世界观/力量体系/核心冲突/读者承诺等是否需要更新，输出补丁并应用。\n"
+    "仅由 Editor 顶栏「同步设定」batch（daily_sync）触发；Chat 说「同步设定」时引导点按钮。\n"
+    "与 generate_settings 的区别：generate 是整体重构（丢弃重写），sync 是增量补丁（只改变化部分）。\n"
+    "与 update_field 的区别：update_field 按用户具体要求改，sync 自动检测新章节带来的变化。",
+)
+SYNC_CHARACTERS = tool_schema(
+    "sync_characters",
+    "根据最新已完成章节，增量同步角色档案（characters.md）。\n"
+    "只读取未同步章节，检测角色状态变化/弧光推进/新角色登场/升降级/退场等，输出补丁并应用。\n"
+    "仅由 Editor 顶栏「同步设定」batch 内自动执行；不由 Chat 单独调用。\n"
+    "与 generate_characters 的区别：generate 是整体重构（丢弃重写），sync 是增量补丁（只改变化部分）。\n"
+    "与 update_field 的区别：update_field 按用户具体要求改，sync 自动检测新章节带来的变化。",
+)
+SYNC_LOCATIONS = tool_schema(
+    "sync_locations",
+    "根据最新已完成章节，增量同步地点档案（locations.md）。\n"
+    "只读取未同步章节，检测新地点/状态变化/控制势力/末次章等，输出补丁并应用。\n"
+    "触发条件：同步设定 batch 内自动执行；不由 Chat 单独调用。\n"
+    "与 generate_locations 的区别：generate 是整体重构，sync 是增量补丁。",
+)
+SYNC_RELATIONSHIPS = tool_schema(
+    "sync_relationships",
+    "根据最新已完成章节，增量同步关系图谱（relationships.md）。\n"
+    "只读取未同步章节，检测关系状态变化/演变时间线/新关系/误解秘密等，输出补丁并应用。\n"
+    "仅由 Editor 顶栏「同步设定」batch 内自动执行；不由 Chat 单独调用。\n"
+    "与 generate_relationships 的区别：generate 是整体重构（丢弃重写），sync 是增量补丁（只改变化部分）。\n"
+    "与 update_field 的区别：update_field 按用户具体要求改，sync 自动检测新章节带来的变化。",
 )
 INIT_NOVEL = tool_schema(
     "init_novel",
@@ -292,6 +296,14 @@ _GENERATE_TOOL_DEFS = [
         "characters",
     ),
     (
+        "generate_locations",
+        "地点档案",
+        "用户要求「生成地点」「整理地点」「梳理地图」「生成地点档案」「整理地点档案」。"
+        "梳理/整理 = 读取已有地点表后整体重组，属于整体重构而非局部修改。"
+        "不包括改单个地点属性等局部修改，那些用 update_field。",
+        "locations",
+    ),
+    (
         "generate_relationships",
         "关系图谱（人物关系、势力关系）",
         "用户要求「梳理人物关系」「整理关系网络」「从零构建关系图谱」。"
@@ -318,24 +330,10 @@ _GENERATE_SCHEMAS = {
 
 GENERATE_OUTLINE = tool_schema(
     "generate_outline",
-    "从零生成或整体重构小说大纲。会询问用户需要重新生成历史大纲、未来大纲还是两者都生成。\n"
-    "触发条件：用户要求「生成大纲」「重新生成大纲」「规划结构」「从零构建大纲」且需要整体重构。\n"
-    "如果只是根据最新章节增量更新大纲，请使用 update_outline_historical / update_outline_future，而非此工具。\n"
-    "不包括局部修改（如改某章标题、调整某段情节），那些用 update_field。",
-)
-GENERATE_OUTLINE_HISTORICAL = tool_schema(
-    "generate_outline_historical",
-    "从零生成或整体重构历史大纲（已完成章节的大纲）。丢弃已有历史大纲内容并重新生成。\n"
-    "触发条件：用户明确要求「重新生成历史大纲」「从零梳理已完成章节的大纲」。\n"
-    "与 update_outline_historical 的区别：此工具是整体重构（丢弃已有内容重新生成），"
-    "update_outline_historical 是增量更新（只修改与新章节相关的部分）。",
-)
-GENERATE_OUTLINE_FUTURE = tool_schema(
-    "generate_outline_future",
-    "从零生成或整体重构未来大纲（未完成章节的规划）。丢弃已有未来大纲内容并重新生成。\n"
-    "触发条件：用户明确要求「重新生成未来大纲」「从零规划未来章节」。\n"
-    "与 update_outline_future 的区别：此工具是整体重构（丢弃已有内容重新生成），"
-    "update_outline_future 是增量更新（只修改与新章节相关的部分）。",
+    "从零生成或整体重构未来章节细纲（outline_future.md）。丢弃已有细纲并重新生成。\n"
+    "触发条件：用户要求「生成大纲」「生成未来大纲/细纲」「重新生成大纲」「从零规划未来章节」。\n"
+    "若已有正文且存在未同步章节，会提示改用 update_outline 做增量同步。\n"
+    "不包括局部修改（改某章标题、调整某段情节），那些用 update_field。",
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -344,28 +342,17 @@ GENERATE_OUTLINE_FUTURE = tool_schema(
 
 UPDATE_OUTLINE = tool_schema(
     "update_outline",
-    "根据最新章节内容同时增量更新历史大纲和未来大纲。"
-    "会依次调用 update_outline_historical 和 update_outline_future。\n"
-    "触发条件：用户要求「更新大纲」「根据最新章节更新大纲」且未指定只更新某一部分。\n"
-    "如果用户只要求更新历史大纲或只更新未来大纲，请使用对应的 update_outline_historical / update_outline_future。",
+    "根据最新已完成章节，增量同步未来章节细纲（outline_future.md）。"
+    "只读取新增章节，在现有细纲基础上调整相关部分。\n"
+    "触发条件：用户要求「更新大纲」「根据最新章节更新大纲」「同步细纲」。\n"
+    "若细纲为空或仅有标题行，会自动转为 generate_outline 全量生成。"
+    "用户要求「生成大纲/未来细纲」时应使用 generate_outline，不要用本工具。",
 )
-UPDATE_OUTLINE_HISTORICAL = tool_schema(
-    "update_outline_historical",
-    "根据最新章节内容增量更新历史大纲（已完成章节的大纲）。"
-    "只读取新增的章节内容，对历史大纲做局部修改，"
-    "将新章节补充到已完成大纲中，保持原有结构不变。\n"
-    "触发条件：有新的已完成章节需要整理到历史大纲中。\n"
-    "与 generate_outline 的区别：generate_outline 是整体重构（丢弃已有内容重新生成），"
-    "此工具是增量更新（只修改与新章节相关的部分）。",
-)
-UPDATE_OUTLINE_FUTURE = tool_schema(
-    "update_outline_future",
-    "根据最新章节内容增量更新未来大纲（未完成章节的规划）。"
-    "只读取新增的章节内容，对未来大纲做局部修改，"
-    "只调整与新章节相关的部分，保持原有结构和其他卷的内容不变。\n"
-    "触发条件：有新的已完成章节可能影响未来的章节规划。\n"
-    "与 generate_outline 的区别：generate_outline 是整体重构（丢弃已有内容重新生成），"
-    "此工具是增量更新（只修改与新章节相关的部分）。",
+UPDATE_CHAPTER_SUMMARIES = tool_schema(
+    "update_chapter_summaries",
+    "为缺少 content_summary 或正文 hash 已变的已写章节生成摘要并写入 outline_structure.json。\n"
+    "仅由 Editor 顶栏「同步设定」batch（daily_sync）内调用；写/存只清空或留空摘要，不由 Chat 触发。\n"
+    "触发条件：daily_sync 检测到缺摘要或 hash 不一致的已写章。",
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -378,23 +365,24 @@ UPDATE_FIELD = tool_schema(
     "这是最常见的修改工具。只要用户不是要求「从零生成/整体重构」，都应该用此工具。\n"
     "典型场景：改名、改一段话、增删条目、调整某个属性、修改某个伏笔等。\n"
     "两种用法：\n"
-    "1.【推荐】patches 模式：先调用 read_novel_content 读取当前内容，然后提供 old/new 补丁直接替换。"
-    "适合明确知道要改什么的小修改（如改名、改一段话、增删条目）。更快更精确。\n"
-    "2. user_request 模式：只提供修改要求，由内部 LLM 自动生成修改。"
-    "适合修改范围较大、需要推理的情况。\n"
+    "1. user_request 模式（默认推荐）：只提供修改要求，工具内部加载当前内容并由 LLM 执行修改。"
+    "适合大多数修改场景。\n"
+    "2. patches 模式：提供 old/new 补丁直接替换；工具内部加载当前内容后按序应用。"
+    "适合用户消息中已给出精确原文片段的小修改（如改名、改一段话）。\n"
     "⚠️ 决策规则：如果用户要求整体重构或从零生成，应使用 generate_* 工具而非此工具。",
     {
         "properties": {
             "field": param_schema(
                 "string",
                 "要修改的字段：settings=写作设定(风格+核心冲突+世界观+力量体系+卷级规划), "
-                "outline_historical=历史大纲, outline_future=未来大纲, "
-                "characters=角色档案, relationships=关系图谱, foreshadowing=伏笔清单",
+                "outline_future=未来大纲, "
+                "characters=角色档案, locations=地点档案, "
+                "relationships=关系图谱, foreshadowing=伏笔清单",
                 enum=[
                     "settings",
-                    "outline_historical",
                     "outline_future",
                     "characters",
+                    "locations",
                     "relationships",
                     "foreshadowing",
                 ],
@@ -408,7 +396,7 @@ UPDATE_FIELD = tool_schema(
                 "array",
                 "替换补丁列表。每个补丁包含 old（原文精确片段）和 new（替换内容），按顺序依次应用。"
                 "提供此参数时跳过内部 LLM，直接应用补丁，更快更精确。"
-                "⚠️ 必须先调用 read_novel_content 读取当前内容后再填写 old 字段，确保文本精确匹配。",
+                "old 须与用户引用的原文逐字一致；工具会从磁盘加载当前内容进行匹配。",
                 items={
                     "type": "object",
                     "properties": {
@@ -442,17 +430,18 @@ READ_NOVEL_CONTENT = tool_schema(
                 "string",
                 "要读取的内容类型："
                 "settings=写作设定(含世界观/力量体系/卷级规划), characters=角色档案, "
-                "relationships=关系图谱, foreshadowing=伏笔清单, "
-                "outline_historical=历史大纲, outline_future=未来大纲, "
+                "locations=地点档案, relationships=关系图谱, foreshadowing=伏笔清单, "
+                "outline_future=未来大纲, chapter_summaries=历史大纲（outline_structure 各章摘要）, "
                 "chapter=指定章节正文(需配合chapter_num), recent_chapters=最近几章+正文片段, "
                 "search=按关键词搜索所有内容(需配合query)",
                 enum=[
                     "settings",
                     "characters",
+                    "locations",
                     "relationships",
                     "foreshadowing",
-                    "outline_historical",
                     "outline_future",
+                    "chapter_summaries",
                     "chapter",
                     "recent_chapters",
                     "search",

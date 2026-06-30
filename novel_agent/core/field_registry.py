@@ -31,21 +31,18 @@ from typing import Optional
 
 class FieldRegistry:
     _FIELDS: dict[str, dict] = {
-        "outline_historical_md_content": {
-            "read_ch_field": "outline_historical_read_ch",
-            "template_name": "outline_historical",
-            "label": "历史大纲",
-            "format_hint": "## 卷级结构 / ## 已完成章节大纲（按卷/篇章结构组织）",
-            "cross_deps": None,
-            "short_name": "outline_historical",
-            "path_attr": "outline_historical_path",
-        },
         "outline_future_md_content": {
             "read_ch_field": None,
             "template_name": "outline_future",
-            "label": "未来大纲",
-            "format_hint": "## 未来章节大纲（按卷/篇章结构组织）",
-            "cross_deps": None,
+            "label": "未来章节细纲",
+            "format_hint": "## 未来章节大纲\n\n每章：标题 + 内容（必写）+ 钩子（必写）+ 伏笔（可选）",
+            "cross_deps": [
+                ("settings_content", "settings_md_content", "设定"),
+                ("characters_content", "characters_md_content", "角色档案"),
+                ("locations_content", "locations_md_content", "地点档案"),
+                ("relationships_content", "relationships_md_content", "关系图谱"),
+                ("foreshadowing_content", "foreshadowing_md_content", "伏笔清单"),
+            ],
             "short_name": "outline_future",
             "path_attr": "outline_future_path",
         },
@@ -68,6 +65,17 @@ class FieldRegistry:
             ],
             "short_name": "characters",
             "path_attr": "characters_path",
+        },
+        "locations_md_content": {
+            "read_ch_field": "locations_read_ch",
+            "template_name": "locations",
+            "label": "地点档案",
+            "format_hint": "## 主要地点(表格) / ## 路线与距离 / ## 次级场景 / ## 改名与废弃",
+            "cross_deps": [
+                ("settings_content", "settings_md_content", "设定"),
+            ],
+            "short_name": "locations",
+            "path_attr": "locations_path",
         },
         "relationships_md_content": {
             "read_ch_field": "relationships_read_ch",
@@ -96,6 +104,7 @@ class FieldRegistry:
     _CASCADE_RULES = {
         "settings_md_content": [
             "characters_md_content",
+            "locations_md_content",
             "relationships_md_content",
             "foreshadowing_md_content",
             "outline_future_md_content",
@@ -105,11 +114,14 @@ class FieldRegistry:
             "foreshadowing_md_content",
             "outline_future_md_content",
         ],
+        "locations_md_content": [
+            "relationships_md_content",
+            "outline_future_md_content",
+        ],
         "relationships_md_content": [
             "foreshadowing_md_content",
             "outline_future_md_content",
         ],
-        "outline_historical_md_content": ["outline_future_md_content"],
         "foreshadowing_md_content": ["outline_future_md_content"],
     }
 
@@ -162,7 +174,7 @@ class FieldRegistry:
         return {
             f"generate_{v['short_name']}": (f, v["label"])
             for f, v in cls._FIELDS.items()
-            if f not in ("outline_historical_md_content", "outline_future_md_content")
+            if f not in ("outline_future_md_content",)
         }
 
     @classmethod

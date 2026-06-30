@@ -1,4 +1,4 @@
-﻿﻿param([switch]$WebOnly)
+﻿﻿﻿﻿param([switch]$WebOnly)
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path

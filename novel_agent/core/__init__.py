@@ -11,7 +11,7 @@
     │     └── ChapterOutline[]（各章节大纲条目）
     ├── MemoryFiles（记忆文件路径配置）
     ├── MetaInfo（元信息：书名、章数、各字段已读章数）
-    └── 各字段内容（settings_md_content, outline_historical_md_content 等）
+    └── 各字段内容（settings_md_content, outline_future_md_content 等）
 """
 
 from .models import (

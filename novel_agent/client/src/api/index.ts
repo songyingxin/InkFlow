@@ -1,4 +1,4 @@
-import type { Book, NovelState, ChatMessage, SseEvent } from '@/types'
+import type { Book, NovelState, ChatMessage, SseEvent, DailySyncStatus } from '@/types'
 
 const BASE = ''
 
@@ -141,6 +141,21 @@ export function deleteChapter(idx: number): Promise<{ message: string; state: No
   })
 }
 
+export function listBackups(idx: number): Promise<{ chapter_idx: number; current_hash: string; backups: { timestamp: string; date: string; time: string; size: number; preview: string; hash: string }[] }> {
+  return request(`/api/chapters/${idx}/backups`)
+}
+
+export function previewBackup(idx: number, timestamp: string): Promise<{ chapter_idx: number; timestamp: string; content: string; size: number; is_full: boolean }> {
+  return request(`/api/chapters/${idx}/backups/preview?timestamp=${encodeURIComponent(timestamp)}`)
+}
+
+export function restoreBackup(idx: number, timestamp: string): Promise<{ message: string; state: NovelState }> {
+  return request(`/api/chapters/${idx}/backups/restore`, {
+    method: 'POST',
+    body: JSON.stringify({ timestamp }),
+  })
+}
+
 export function updateField(field: string, value: string): Promise<{ message: string; state: NovelState }> {
   return request('/api/fields/update', {
     method: 'POST',
@@ -160,8 +175,17 @@ export async function* chatStream(
   message: string,
   fieldValues: Record<string, string>,
   signal?: AbortSignal,
+  displayMessage?: string,
 ): AsyncGenerator<SseEvent> {
-  yield* postSseStream('/api/chat/stream', { message, field_values: fieldValues }, signal)
+  yield* postSseStream(
+    '/api/chat/stream',
+    {
+      message,
+      display_message: displayMessage ?? message,
+      field_values: fieldValues,
+    },
+    signal,
+  )
 }
 
 export async function* resumeStream(
@@ -171,12 +195,14 @@ export async function* resumeStream(
   yield* postSseStream('/api/chat/resume', { value }, signal)
 }
 
-export function importChaptersBatch(file: File): Promise<{ message: string; imported_count: number; state: NovelState }> {
-  const formData = new FormData()
-  formData.append('file', file)
-  return request('/api/chapters/import-batch', {
-    method: 'POST',
-    body: formData,
-    headers: {},
-  })
+export function getDailySyncStatus(): Promise<DailySyncStatus> {
+  return request('/api/maintenance/daily-sync/status')
+}
+
+export function dismissDailySyncPrompt(): Promise<{ message: string; status: DailySyncStatus }> {
+  return request('/api/maintenance/daily-sync/dismiss', { method: 'POST' })
+}
+
+export async function* dailySyncStream(signal?: AbortSignal): AsyncGenerator<SseEvent> {
+  yield* postSseStream('/api/maintenance/daily-sync/run', {}, signal)
 }

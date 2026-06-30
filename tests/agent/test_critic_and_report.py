@@ -185,7 +185,10 @@ class TestBuildCriticReport:
 
 class TestShouldTriggerCritic:
     def test_creator_with_production_tool(self):
-        assert AgentLoop._should_trigger_critic("creator", ["continue_writing"]) is True
+        assert AgentLoop._should_trigger_critic("creator", ["continue_writing"]) is False
+
+    def test_creator_with_regenerate_chapter(self):
+        assert AgentLoop._should_trigger_critic("creator", ["regenerate_chapter"]) is False
 
     def test_creator_with_generate_settings(self):
         assert AgentLoop._should_trigger_critic("creator", ["generate_settings"]) is True
@@ -212,13 +215,13 @@ class TestShouldTriggerCritic:
         assert AgentLoop._should_trigger_critic("critic", ["critic_consistency"]) is False
 
     def test_creator_with_regenerate_chapter(self):
-        assert AgentLoop._should_trigger_critic("creator", ["regenerate_chapter"]) is True
+        assert AgentLoop._should_trigger_critic("creator", ["regenerate_chapter"]) is False
 
     def test_creator_with_generate_outline(self):
         assert AgentLoop._should_trigger_critic("creator", ["generate_outline"]) is True
 
     def test_editor_with_three_write_tools(self):
-        assert AgentLoop._should_trigger_critic("editor", ["update_field", "update_outline", "update_outline_historical"]) is True
+        assert AgentLoop._should_trigger_critic("editor", ["update_field", "update_outline"]) is True
 
 
 class TestRunCriticReview:

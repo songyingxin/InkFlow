@@ -119,6 +119,7 @@ _TRUNCATION_DEFAULTS = {
     "graph_task_complete_chars": 200,
     "dispatch_snippet_chars": 500,
     "chapter_content_summary_chars": 200,
+    "chapter_summary_source_chars": 12000,
     "evaluator_result_chars": 200,
     "evaluator_agent_response_chars": 1500,
     "nudge_interval": 5,
@@ -150,6 +151,7 @@ class TruncationConfig:
     graph_task_complete_chars: int = 200
     dispatch_snippet_chars: int = 500
     chapter_content_summary_chars: int = 200
+    chapter_summary_source_chars: int = 12000
     evaluator_result_chars: int = 200
     evaluator_agent_response_chars: int = 1500
     nudge_interval: int = 5

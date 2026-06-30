@@ -493,7 +493,7 @@ class TestSseEventToEditorStateMapping:
         assert "target" in evt
         assert evt["target"] in [
             "settings_md_content", "characters_md_content",
-            "outline_historical_md_content", "outline_future_md_content",
+            "outline_future_md_content",
             "relationships_md_content", "foreshadowing_md_content",
             "chapter_new",
         ] or evt["target"].startswith("chapter_")

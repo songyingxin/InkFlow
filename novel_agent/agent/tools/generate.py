@@ -1,53 +1,68 @@
 """
 字段生成类工具处理器
-处理 generate_outline / generate_settings /
-generate_characters / generate_relationships /
-generate_foreshadowing 五个生成工具。
-设计参考：
-  - Claude Code: 生成类工具整体重构，修改类工具局部修改，职责清晰分离
-  - Hermes: handler 只编排流程，LLM 调用委托给 generation 层
-  - OpenClaw: 通过 stream_writer 推送 generate_start/token/done 事件
+处理 generate_outline / generate_settings / generate_characters /
+generate_relationships / generate_foreshadowing，
+以及 update_outline / update_chapter_summaries 等增量更新工具。
 """
 
 import logging
+from ...core.outline_utils import outline_future_is_empty
+from ..generation.base import (
+    _RESET,
+    get_unread_chapter_indices,
+    future_outline_stream,
+    load_chapter_text,
+)
 from ..generation.fields import (
     generate_field_stream,
     update_field_stream,
     FieldRegistry,
 )
-from .update import compute_diff_highlights
-from ..generation.base import (
-    _RESET,
-    get_unread_chapter_indices,
-    iterative_generate_stream,
-    future_outline_stream,
-    load_chapter_text,
-)
+from ..generation.chapter import sync_chapter_summaries
 from ..memory.novel import NovelMemory
+from .update import compute_diff_highlights
 from .common import get_writer, ask_user_confirmation
 from .registry import register_tool, ToolRegistry
 from .schema import (
     GENERATE_OUTLINE,
-    GENERATE_OUTLINE_HISTORICAL,
-    GENERATE_OUTLINE_FUTURE,
     UPDATE_OUTLINE,
-    UPDATE_OUTLINE_HISTORICAL,
-    UPDATE_OUTLINE_FUTURE,
+    UPDATE_CHAPTER_SUMMARIES,
     _GENERATE_SCHEMAS,
 )
 
 logger = logging.getLogger(__name__)
 
+_OUTLINE_FUTURE_LABEL = "未来章节细纲"
+_REGENERATE_OUTLINE_KEYWORDS = (
+    "生成未来",
+    "重新生成",
+    "重生成",
+    "重做",
+    "从零规划",
+    "从零生成",
+)
+
+
+def _wants_full_regenerate(user_request: str) -> bool:
+    req = user_request or ""
+    return any(kw in req for kw in _REGENERATE_OUTLINE_KEYWORDS)
+
+
+async def _full_generate_outline(state) -> str:
+    """全量生成 outline_future.md（丢弃已有细纲）。"""
+    return await handle_generate_field(
+        state,
+        "outline_future_md_content",
+        _OUTLINE_FUTURE_LABEL,
+        reread_all=True,
+    )
+
 
 @register_tool("generate_outline", schema=GENERATE_OUTLINE, toolset="write")
 async def handle_generate_outline(state) -> str:
-    """
-    大纲生成协调器
-    询问用户需要重新生成历史大纲、未来大纲还是两者都生成。
-    首次生成时直接生成未来大纲。
-    """
     w = get_writer(state)
     novel_state = state.novel_state
+    user_request = state.user_request or ""
     has_chapters = bool(novel_state.outline and novel_state.outline.chapters)
     chapters_dir = novel_state.memory_files.chapters_dir
     has_written = False
@@ -55,9 +70,18 @@ async def handle_generate_outline(state) -> str:
         has_written = any(chapters_dir.glob("*.md"))
 
     if not has_written:
-        return await _generate_outline_first_time(state, w)
+        result = await _full_generate_outline(state)
+        return f"未来章节细纲生成完成：{result}"
 
-    unread = get_unread_chapter_indices(novel_state, "outline_historical_read_ch")
+    existing = (
+        state.field_values.get("outline_future_md_content")
+        or novel_state.outline_future_md_content
+        or ""
+    )
+    if _wants_full_regenerate(user_request) or outline_future_is_empty(existing):
+        return await _full_generate_outline(state)
+
+    unread = get_unread_chapter_indices(novel_state, "outline_future_read_ch")
     if unread:
         chapter_range = (
             f"第{unread[0]}章 ~ 第{unread[-1]}章"
@@ -67,118 +91,94 @@ async def handle_generate_outline(state) -> str:
         w(
             {
                 "type": "token",
-                "token": f"检测到最新章节（{chapter_range}），"
-                f"请使用 update_outline_historical 和/或 update_outline_future 进行增量更新。\n",
+                "token": (
+                    f"\n📋 检测到 {len(unread)} 章未同步（{chapter_range}），"
+                    f"请使用 `update_outline` 增量更新。\n"
+                ),
             }
         )
-        return f"大纲有{len(unread)}章未读章节，请使用增量更新工具"
+        return f"未来细纲有{len(unread)}章未同步章节，请使用 update_outline"
 
     choice = ask_user_confirmation(
         field="outline",
         label="大纲",
-        message="需要重新生成哪部分大纲？",
-        options=["历史大纲 + 未来大纲", "仅历史大纲", "仅未来大纲"],
+        message="需要重新生成未来章节细纲吗？",
+        options=["重新生成未来细纲", "取消"],
     )
-    if choice == "仅历史大纲":
-        return await handle_generate_outline_historical(state)
-    elif choice == "仅未来大纲":
-        return await handle_generate_outline_future(state)
-    else:
-        hist_result = await handle_generate_outline_historical(state)
-        w({"type": "token", "token": "\n"})
-        future_result = await handle_generate_outline_future(state)
-        return f"大纲整体重新生成完成：{hist_result}；{future_result}"
-
-
-@register_tool("generate_outline_historical", schema=GENERATE_OUTLINE_HISTORICAL, toolset="write")
-async def handle_generate_outline_historical(state) -> str:
-    """
-    从零生成或整体重构历史大纲
-    """
-    return await handle_generate_field(
-        state,
-        "outline_historical_md_content",
-        "历史大纲",
-        reread_all=True,
-    )
-
-
-@register_tool("generate_outline_future", schema=GENERATE_OUTLINE_FUTURE, toolset="write")
-async def handle_generate_outline_future(state) -> str:
-    """
-    从零生成或整体重构未来大纲
-    """
-    return await handle_generate_field(
-        state,
-        "outline_future_md_content",
-        "未来大纲",
-        reread_all=True,
-    )
+    if choice == "取消":
+        return "已取消细纲重新生成"
+    return await _full_generate_outline(state)
 
 
 @register_tool("update_outline", schema=UPDATE_OUTLINE, toolset="write")
 async def handle_update_outline(state) -> str:
-    """
-    同时增量更新历史大纲和未来大纲
-    """
     w = get_writer(state)
     novel_state = state.novel_state
-    unread = get_unread_chapter_indices(novel_state, "outline_historical_read_ch")
-    if not unread:
-        w({"type": "token", "token": "大纲没有未读章节，无需更新。\n"})
-        return "大纲没有未读章节"
-
-    hist_result = await handle_update_outline_historical(state)
-    w({"type": "token", "token": "\n"})
-    future_result = await handle_update_outline_future(state)
-    return f"大纲增量更新完成：{hist_result}；{future_result}"
-
-
-@register_tool("update_outline_historical", schema=UPDATE_OUTLINE_HISTORICAL, toolset="write")
-async def handle_update_outline_historical(state) -> str:
-    """
-    增量更新历史大纲
-    只读取新增的章节内容，对历史大纲做局部修改，
-    将新章节补充到已完成大纲中，保持原有结构不变。
-    """
-    w = get_writer(state)
-    novel_state = state.novel_state
-    unread = get_unread_chapter_indices(novel_state, "outline_historical_read_ch")
-    if not unread:
-        w({"type": "token", "token": "历史大纲没有未读章节，无需更新。\n"})
-        return "历史大纲没有未读章节"
-
-    return await _do_incremental_update(
-        state, w, unread, "outline_historical", "历史大纲"
-    )
-
-
-@register_tool("update_outline_future", schema=UPDATE_OUTLINE_FUTURE, toolset="write")
-async def handle_update_outline_future(state) -> str:
-    """
-    增量更新未来大纲
-    只读取新增的章节内容，对未来大纲做局部修改，
-    只调整与新章节相关的部分，保持原有结构和其他卷的内容不变。
-    """
-    w = get_writer(state)
-    novel_state = state.novel_state
-    unread = get_unread_chapter_indices(novel_state, "outline_historical_read_ch")
-    if not unread:
-        w({"type": "token", "token": "未来大纲没有未读章节，无需更新。\n"})
-        return "未来大纲没有未读章节"
-
-    hist_content = (
-        state.field_values.get("outline_historical_md_content")
-        or getattr(novel_state, "outline_historical_md_content", "")
+    missing = NovelMemory.get_chapters_missing_summary(novel_state)
+    if missing:
+        preview = "、".join(str(i) for i in missing[:5])
+        suffix = f" 等{len(missing)}章" if len(missing) > 5 else ""
+        msg = (
+            f"\n⚠️ **缺少 {len(missing)} 章摘要**（{preview}{suffix}）\n\n"
+            "> 请先点击编辑器顶栏「**同步设定**」，再使用「**同步细纲**」。\n"
+        )
+        w({"type": "token", "token": msg})
+        return f"有 {len(missing)} 章缺少摘要，无法增量更新未来细纲"
+    unread = get_unread_chapter_indices(novel_state, "outline_future_read_ch")
+    existing = (
+        state.field_values.get("outline_future_md_content")
+        or novel_state.outline_future_md_content
         or ""
     )
+    if not unread:
+        if outline_future_is_empty(existing) or _wants_full_regenerate(state.user_request or ""):
+            w({"type": "token", "token": "\n📋 细纲为空，正在从零生成未来细纲...\n\n"})
+            return await _full_generate_outline(state)
+        w({"type": "token", "token": "\n✅ 未来细纲已与最新章节同步，无需更新。\n"})
+        return "未来细纲没有未同步章节，无需更新。若要全量重写请使用 generate_outline"
+
+    historical = NovelMemory.assemble_historical_outline(novel_state, written_only=True)
     return await _do_incremental_update(
-        state, w, unread, "outline_future", "未来大纲", hist_content=hist_content
+        state, w, unread, "outline_future", _OUTLINE_FUTURE_LABEL, historical_outline=historical
     )
+
+
+@register_tool("update_chapter_summaries", schema=UPDATE_CHAPTER_SUMMARIES, toolset="write")
+async def handle_update_chapter_summaries(state) -> str:
+    w = get_writer(state)
+    novel_state = state.novel_state
+    missing = NovelMemory.get_chapters_missing_summary(novel_state)
+    if not missing:
+        w({"type": "token", "token": "\n✅ 所有已写章节均已有摘要。\n"})
+        return "outline_structure 中所有已写章节均已有摘要，无需更新"
+    return await _sync_outline_summaries(state, w, missing)
+
+
+async def _sync_outline_summaries(state, w, indices: list[int]) -> str:
+    novel_state = state.novel_state
+    chapter_range = (
+        f"第{indices[0]}章 ~ 第{indices[-1]}章"
+        if len(indices) > 1
+        else f"第{indices[0]}章"
+    )
+    w({"type": "token", "token": f"\n📝 **生成章节摘要**（{chapter_range}）\n\n"})
+
+    def on_progress(idx, title, _summary):
+        label = f"第{idx}章"
+        if title:
+            label += f"「{title}」"
+        w({"type": "token", "token": f"  - {label}\n"})
+
+    return await sync_chapter_summaries(novel_state, indices, on_progress=on_progress)
 
 
 async def _do_incremental_update(
-    state, w, unread: list[int], short_field: str, label: str, hist_content: str = ""
+    state,
+    w,
+    unread: list[int],
+    short_field: str,
+    label: str,
+    historical_outline: str = "",
 ) -> str:
     novel_state = state.novel_state
     chapter_texts = []
@@ -197,28 +197,41 @@ async def _do_incremental_update(
     existing = (
         state.field_values.get(full_field) or getattr(novel_state, full_field, "") or ""
     )
-    if short_field == "outline_future":
-        user_request = (
-            f"最近完成了{chapter_range}，内容概要如下：\n\n{chapters_str}\n\n"
-            f"请根据以上新增章节和当前已完成大纲，局部修改未来大纲。"
-            f"只调整与新章节相关的部分，保持原有结构和其他卷的内容不变。"
-        )
-    else:
-        user_request = (
-            f"以下为新增章节内容：\n\n{chapters_str}\n\n"
-            f"请根据新增章节局部修改{label}。"
-            f"将新章节补充到大纲中，只修改相关部分，保持原有结构不变。"
-        )
+    user_request = (
+        f"最近完成了{chapter_range}，内容概要如下：\n\n{chapters_str}\n\n"
+        f"【已完成章节摘要（outline_structure）】\n{historical_outline or '暂无'}\n\n"
+        f"【当前未来章节细纲】\n{existing or '暂无'}\n\n"
+        f"请根据以上新增章节和当前细纲，输出**完整**更新后的未来章节细纲。"
+        f"只调整与新章节相关的部分，保留其他未写章节的细纲；"
+        f"使用 outline_future 模板的格式（每章：内容 + 钩子；有伏笔才加伏笔行），不要 SEARCH/REPLACE。"
+    )
 
-    w({"type": "token", "token": f"📋 正在增量更新{label}（{chapter_range}）...\n"})
-    w({"type": "generate_start", "target": short_field})
+    w({"type": "token", "token": f"\n📋 **更新{label}**（{chapter_range}）\n\n"})
+    w({"type": "generate_start", "target": full_field})
     full_content = ""
-    stream = update_field_stream(novel_state, short_field, existing, user_request)
+    buffer = ""
+    if short_field == "outline_future":
+        stream = _build_future_stream(novel_state, state, user_request)
+    else:
+        stream = update_field_stream(novel_state, short_field, existing, user_request)
     async for token in stream:
         full_content += token
-        w({"type": "generate_token", "target": short_field, "token": token})
+        buffer += token
+        w({"type": "generate_token", "target": full_field, "token": token})
+        if len(buffer) >= 200:
+            try:
+                NovelMemory.save_field_content(novel_state, full_field, full_content, update_read_ch=False)
+            except Exception:
+                pass
+            buffer = ""
 
-    w({"type": "generate_done", "target": short_field})
+    if buffer:
+        try:
+            NovelMemory.save_field_content(novel_state, full_field, full_content, update_read_ch=False)
+        except Exception:
+            pass
+
+    w({"type": "generate_done", "target": full_field})
     highlights = compute_diff_highlights(existing, full_content)
     w(
         {
@@ -228,18 +241,20 @@ async def _do_incremental_update(
             "highlights": highlights,
         }
     )
-    NovelMemory.save_field_content(novel_state, full_field, full_content)
+    NovelMemory.save_field_content(novel_state, full_field, full_content, update_read_ch=False)
+    if unread:
+        novel_state.meta.outline_future_read_ch = max(unread)
+        NovelMemory.save_meta(novel_state, novel_state.meta)
     state.field_values[full_field] = full_content
+
+    w({"type": "token", "token": (
+        f"\n---\n"
+        f"### ✅ {label} 已更新\n\n"
+        f"**{len(full_content)}** 字 | 已同步 {chapter_range}\n\n"
+        "> 💡 未来细纲已刷新，边栏可查看新规划\n\n"
+    )})
+
     return f"{label}增量更新完成（{chapter_range}），共{len(full_content)}字"
-
-
-async def _generate_outline_first_time(state, w) -> str:
-    future_result = await handle_generate_field(
-        state,
-        "outline_future_md_content",
-        "未来大纲",
-    )
-    return f"未来大纲生成完成：{future_result}"
 
 
 async def handle_generate_field(
@@ -249,13 +264,6 @@ async def handle_generate_field(
     user_request: str = None,
     reread_all: bool | None = None,
 ) -> str:
-    """
-    处理字段生成工具调用
-    reread_all 参数：
-      - None: 自动判断，无新章节时通过 interrupt 询问用户
-      - True: 强制重读所有章节（跳过询问）
-      - False: 不重读，仅基于现有内容更新
-    """
     w = get_writer(state)
     novel_state = state.novel_state
     if user_request is None:
@@ -278,15 +286,11 @@ async def handle_generate_field(
                         message=f"{label}没有新增章节，是否重读全部章节？",
                     )
 
-    is_historical = field == "outline_historical_md_content"
     is_future = field == "outline_future_md_content"
-    w({"type": "token", "token": f"📋 正在生成{label}...\n"})
+    action = "从零规划" if reread_all else "生成"
+    w({"type": "token", "token": f"\n---\n### 📋 {action} · {label}\n\n"})
     w({"type": "generate_start", "target": field})
-    if is_historical:
-        stream = _build_historical_stream(
-            novel_state, field, existing, user_request, label, reread_all, state
-        )
-    elif is_future:
+    if is_future:
         stream = _build_future_stream(novel_state, state, user_request)
     else:
         stream = generate_field_stream(
@@ -294,20 +298,45 @@ async def handle_generate_field(
         )
 
     full_content = ""
+    buffer = ""
     try:
         async for token in stream:
             if token is _RESET:
+                if full_content:
+                    try:
+                        NovelMemory.save_field_content(novel_state, field, full_content, update_read_ch=False)
+                    except Exception:
+                        pass
                 full_content = ""
+                buffer = ""
                 w({"type": "generate_reset", "target": field})
                 continue
             full_content += token
+            buffer += token
             w({"type": "generate_token", "target": field, "token": token})
+            if len(buffer) >= 200:
+                try:
+                    NovelMemory.save_field_content(novel_state, field, full_content, update_read_ch=False)
+                except Exception:
+                    pass
+                buffer = ""
     except Exception as e:
         logger.error("generate_field 失败", exc_info=True)
         error_msg = str(e) or type(e).__name__
         w({"type": "generate_done", "target": field})
-        w({"type": "token", "token": f"⚠️ 生成{label}失败：{error_msg}\n"})
+        w({"type": "token", "token": f"\n### ⚠️ {label}生成失败\n\n**原因：**{error_msg}\n\n"})
+        if full_content:
+            try:
+                NovelMemory.save_field_content(novel_state, field, full_content, update_read_ch=False)
+            except Exception:
+                pass
         return f"generate_{field} 失败：{error_msg}"
+
+    if buffer:
+        try:
+            NovelMemory.save_field_content(novel_state, field, full_content, update_read_ch=False)
+        except Exception:
+            pass
 
     w({"type": "generate_done", "target": field})
     highlights = compute_diff_highlights(existing, full_content)
@@ -320,43 +349,39 @@ async def handle_generate_field(
         }
     )
     NovelMemory.save_field_content(novel_state, field, full_content)
+    if field == "outline_future_md_content" and novel_state.outline:
+        written = [
+            ch.idx for ch in novel_state.outline.chapters if ch.idx is not None and ch.is_written
+        ]
+        if written:
+            novel_state.meta.outline_future_read_ch = max(written)
+            NovelMemory.save_meta(novel_state, novel_state.meta)
     state.field_values[field] = full_content
-    return f"{label}已生成并保存，共{len(full_content)}字"
 
+    word_count = len(full_content)
+    w({"type": "token", "token": (
+        f"\n---\n"
+        f"### ✅ {label} 已完成\n\n"
+        f"**{word_count}** 字 | 已保存\n\n"
+        + ("> 💡 侧边栏已刷新，你可以继续编辑\n\n" if not is_future else
+           "> 💡 大纲已更新，侧边栏将显示新规划\n\n")
+    )})
 
-def _build_historical_stream(
-    novel_state, field, existing, user_request, label, reread_all, state
-):
-    read_ch_field = FieldRegistry.read_ch_field(field)
-    return iterative_generate_stream(
-        novel_state,
-        read_ch_field=read_ch_field,
-        existing=existing,
-        template_name="outline_historical",
-        user_request=user_request,
-        label=label,
-        reread_all=reread_all,
-    )
+    return f"{label}已生成并保存，共{word_count}字"
 
 
 def _build_future_stream(novel_state, state, user_request):
-    from ..memory.novel import NovelMemory
-
     NovelMemory.ensure_all_fields_loaded(
         novel_state,
         [
-            "outline_historical_md_content",
             "settings_md_content",
             "characters_md_content",
+            "locations_md_content",
             "relationships_md_content",
             "foreshadowing_md_content",
         ],
     )
-    historical = (
-        state.field_values.get("outline_historical_md_content")
-        or getattr(novel_state, "outline_historical_md_content", "")
-        or ""
-    )
+    historical = NovelMemory.assemble_historical_outline(novel_state, written_only=True)
     settings = (
         state.field_values.get("settings_md_content")
         or getattr(novel_state, "settings_md_content", "")

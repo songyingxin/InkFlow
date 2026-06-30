@@ -1,5 +1,5 @@
 <template>
-  <div class="md-editor">
+  <div class="md-editor" :class="{ 'md-editor--steady': generating || streaming || steady }">
     <div class="md-editor-header">
       <span class="md-editor-title">{{ title }}</span>
       <div class="md-editor-actions">
@@ -152,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { marked } from 'marked'
 import { buildLineDiffRows, computeChangedLineNumbers } from '@/utils/lineDiff'
 
@@ -199,6 +199,11 @@ const scrollAreaRef = ref<HTMLDivElement>()
 const gutterRef = ref<HTMLDivElement>()
 const lineBgRef = ref<HTMLDivElement>()
 const diffMode = ref(false)
+const steady = ref(false)
+
+onMounted(() => {
+  setTimeout(() => { steady.value = true }, 500)
+})
 
 const hasHighlights = computed(() => !!(props.highlights && props.highlights.length > 0))
 
@@ -249,8 +254,26 @@ function jumpToNextChange(currentLineIdx: number) {
   ta.scrollTop = Math.max(0, targetLine * lineH - ta.clientHeight / 3)
 }
 
+const _streamHtml = ref('')
+let _streamTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(() => props.content, () => {
+  if (!props.streaming) return
+  if (!_streamTimer) {
+    _streamTimer = setTimeout(() => {
+      _streamTimer = null
+      if (props.streaming && props.content) {
+        _streamHtml.value = marked.parse(props.content) as string
+      }
+    }, 100)
+  }
+})
+
 const renderedMarkdown = computed(() => {
   if (!props.content) return '<p style="color:var(--text-faint);">暂无内容</p>'
+  if (props.streaming) {
+    return _streamHtml.value || '<p style="color:var(--text-faint);">生成中...</p>'
+  }
   return marked.parse(props.content) as string
 })
 
@@ -293,6 +316,8 @@ watch(() => props.streaming, (val) => {
   display: flex; flex-direction: column; flex: 1; min-height: 0;
   animation: reveal-up 400ms var(--spring-slow) both;
 }
+
+.md-editor--steady { animation: none; }
 
 .md-editor-header {
   display: flex; align-items: center; justify-content: space-between;

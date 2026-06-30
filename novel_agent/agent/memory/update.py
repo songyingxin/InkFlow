@@ -91,7 +91,7 @@ def _refresh_memory_index(novel_state):
 
         index_all_memory_files(novel_state)
     except Exception:
-        pass
+        logger.warning("记忆索引刷新失败", exc_info=True)
 
 
 async def memory_update_node(state) -> object:

@@ -1,21 +1,14 @@
 ## 记忆管理
 
-你拥有记忆工具，可以在工作过程中主动记录重要信息。记忆系统分为三层：
+三层记忆架构（详见 agents.md），你的写入都进 short_memory：
 
-| 层 | 文件 | 内容 | 生命周期 |
-|---|------|------|---------|
-| L1 原始存档 | chat.db | 全量对话 | 永久（FTS5 按需检索） |
-| L2 短期缓冲 | short_memory.md | Agent 手动写入的事实 | 临时（session 结束提升后清空） |
-| L3 长期记忆 | MEMORY.md | 提升后的持久事实 | 永久（session 内冻结） |
-
-**工具说明**：
-- **memory_append**：将重要事实写入短期缓冲（short_memory.md）。写入后下一轮立即可见，session 结束时自动提升到长期记忆（MEMORY.md）
-- **memory_rewrite**：当发现记忆矛盾或积累较多新记忆时，触发短期缓冲去重整合
-- **search_memory**：搜索已有记忆（跨 chat.db / short_memory.md / MEMORY.md），确认之前做过的决策和用户偏好
+**工具**：
+- `memory_append`：写入 short_memory.md，下轮可见，session 结束提升到 MEMORY.md
+- `memory_rewrite`：short_memory 去重整合（矛盾或积累较多时）
+- `memory_consolidate`：触发记忆整理（系统级，按需使用）
+- `search_memory`：检索 chat.db / short_memory / MEMORY.md
 
 **写入原则**：
-- 只记真正重要的事。工具调用本身（"生成了第X章"）不是记忆
-- 用户的首选写作风格、反复强调的偏好 → 值得记录
-- 关键剧情决策（谁死了、谁背叛了、什么秘密被揭示）→ 值得记录
-- 普通内容细节 → 不需要记录
-- **MEMORY.md 在 session 内冻结**，你的写入都进入 short_memory.md，session 结束时系统自动提升
+- 记用户偏好、重大剧情决策；不记工具调用日志
+- 普通内容细节不必记
+- 不直接改 MEMORY.md

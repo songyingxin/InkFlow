@@ -144,7 +144,8 @@ CREATE TABLE IF NOT EXISTS messages (
     timestamp TEXT NOT NULL,
     token_count INTEGER DEFAULT 0,
     finish_reason TEXT DEFAULT '',
-    subagent_trace TEXT DEFAULT ''
+    subagent_trace TEXT DEFAULT '',
+    display_content TEXT DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
@@ -170,6 +171,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts_trigram USING fts5(
             "ALTER TABLE messages ADD COLUMN finish_reason TEXT DEFAULT ''",
             "ALTER TABLE messages ADD COLUMN subagent_trace TEXT DEFAULT ''",
             "CREATE INDEX IF NOT EXISTS idx_messages_tool_name ON messages(tool_name)",
+        ],
+        3: [
+            "ALTER TABLE messages ADD COLUMN display_content TEXT DEFAULT ''",
         ],
     }
 
@@ -205,10 +209,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts_trigram USING fts5(
         return result_id
 
     @staticmethod
-    def load_chat_messages(state: NovelState, limit: int = 10, rounds: int = 0) -> list[dict]:
+    def load_chat_messages(
+        state: NovelState,
+        limit: int = 10,
+        rounds: int = 0,
+        *,
+        for_agent: bool = False,
+    ) -> list[dict]:
         store = ConversationMemory._get_store(state)
         session_id = state.meta.title or "default"
-        return store.load_recent_messages(session_id, limit=limit, rounds=rounds)
+        return store.load_recent_messages(
+            session_id, limit=limit, rounds=rounds, for_agent=for_agent
+        )
 
     @staticmethod
     def clear_chat_messages(state: NovelState):
@@ -538,18 +550,24 @@ class ChatStore:
 
         finish_reason = meta.get("finish_reason", "")
         subagent_trace = meta.get("subagent_trace", "")
+        display_content = (
+            msg.get("display_content")
+            or meta.get("display_content")
+            or ""
+        )
 
         with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO messages "
                 "(id, parent_id, session_id, role, content, reasoning, "
                 " tool_calls, tool_name, tool_call_id, timestamp, "
-                " token_count, finish_reason, subagent_trace) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " token_count, finish_reason, subagent_trace, display_content) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     msg_id, parent_id, session_id, msg.get("role", "user"),
                     content_text, reasoning, tool_calls_json, tool_name,
-                    tool_call_id, _now_iso(), token_count, finish_reason, subagent_trace,
+                    tool_call_id, _now_iso(), token_count, finish_reason,
+                    subagent_trace, display_content,
                 ),
             )
             if content_text:
@@ -565,11 +583,17 @@ class ChatStore:
         return msg_id
 
     def load_recent_messages(
-        self, session_id: str, limit: int = 10, rounds: int = 0
+        self,
+        session_id: str,
+        limit: int = 10,
+        rounds: int = 0,
+        *,
+        for_agent: bool = False,
     ) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT role, content, reasoning, tool_calls, tool_call_id "
+                "SELECT role, content, reasoning, tool_calls, tool_call_id, "
+                "subagent_trace, display_content "
                 "FROM messages WHERE session_id = ? AND role IN ('user', 'assistant') "
                 "ORDER BY timestamp DESC LIMIT ?",
                 (session_id, (rounds * 4 if rounds > 0 else limit) * 2),
@@ -577,12 +601,21 @@ class ChatStore:
 
         messages = []
         user_count = 0
-        for role, content, reasoning, tc_json, tc_id in rows:
-            text = content or ""
+        for role, content, reasoning, _tc_json, _tc_id, trace_json, display_content in rows:
+            agent_text = content or ""
+            display_text = (display_content or "").strip() or agent_text
+            text = agent_text if for_agent else display_text
             thinking = reasoning or ""
-            if not text:
+            if not text and not thinking:
                 continue
-            messages.append({"role": role, "content": text, "thinking": thinking})
+            item: dict = {"role": role, "content": text}
+            if thinking:
+                item["thinking"] = thinking
+            if role == "assistant":
+                activity = _activity_from_trace(trace_json or "")
+                if activity:
+                    item["activity"] = activity
+            messages.append(item)
             if role == "user":
                 user_count += 1
             if rounds > 0:
@@ -672,6 +705,24 @@ def _has_cjk(text: str) -> bool:
         "\u4e00" <= c <= "\u9fff" or "\u3400" <= c <= "\u4dbf" or "\u3000" <= c <= "\u303f"
         for c in text
     )
+
+
+def _activity_from_trace(trace_json: str) -> list[dict]:
+    if not trace_json:
+        return []
+    try:
+        trace = json.loads(trace_json)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(trace, dict):
+        return []
+    agent = trace.get("agent") or ""
+    tools = trace.get("called_tools") or []
+    if not agent and not tools:
+        return []
+    from ...multi_agent.activity import build_activity_trace
+
+    return build_activity_trace(agent, tools)
 
 
 def _extract_tool_name(msg: dict) -> str:
