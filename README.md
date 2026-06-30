@@ -29,7 +29,7 @@ InkFlow 为这些挑战设计了专门的解决方案。
 
 | Agent | 认知模式 | 职责 | 工具集 |
 |-------|---------|------|--------|
-| **Reader** | 理解 | 阅读小说内容、回答问题、检查一致性 | `read_novel_content`, `task_complete` |
+| **Reader** | 理解 | 阅读小说内容、回答问题、伏笔汇总 | `read_novel_content`, `foreshadowing_status`, `search_memory`, `task_complete` |
 | **Creator** | 创建 | 从零生成章节、大纲、设定、世界观、角色、伏笔 | `continue_writing`, `regenerate_chapter`, `generate_*` ×7, `read_novel_content`, `task_complete` |
 | **Editor** | 修改 | 局部修改设定、增量更新大纲 | `update_field`, `update_outline`, `update_chapter_summaries`, `read_novel_content`, `task_complete` |
 
